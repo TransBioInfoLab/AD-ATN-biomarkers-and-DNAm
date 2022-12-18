@@ -2,7 +2,7 @@
 
 Wei Zhang, Juan I. Young, Lissette Gomez, Michael A. Schmidt, David Lukacsovich, Achintya Varma, X. Steven Chen, Eden R. Martin, Lily Wang
 
-### Description
+## Description
 
 This github repository includes scripts used for the analyses in the above manuscript.
 
@@ -42,7 +42,7 @@ For pathway analysis, we used a robust rank aggregation method to perform the an
 
 ### 4. Integrative methylation-to-gene expression analysis
 
-To evaluate the DNA methylation effect on the gene expression of nearby genes, we analyzed matched gene expression (Affymetrix Human GenomeU 219 array) and DNA methylation (EPIC array) in ADNI data. To associate genes with DNA methylation sites, we used the MethReg R package and considered CpGs located in the promoter regions and distal regions separate.
+To evaluate the DNA methylation effect on the gene expression of nearby genes, we analyzed matched gene expression (Affymetrix Human GenomeU 219 array) and DNA methylation (EPIC array) in ADNI data. To associate genes with DNA methylation sites, we used the *MethReg* R package and considered CpGs located in the promoter regions and distal regions separate.
 
 | File |  Link |
 |---------------------|-------------|
@@ -56,7 +56,7 @@ To evaluate the DNA methylation effect on the gene expression of nearby genes, w
 | mQTLs_analysis/ADbiomarkers_mQTLs_analysis.R | [Link to the script](https://github.com/TransBioInfoLab/AD-ATN-biomarkers-and-DNAm/blob/main/code/mQTLs_analysis/ADbiomarkers_mQTLs_analysis.R) |
 
 
-# For reproducible research
+## For reproducible research
 
 The following R packages are required:
 
@@ -143,9 +143,9 @@ tz       America/New_York
 date     2022-12-16
 ```
 
-# Acknowledgement
+## Acknowledgement
 Data used in the preparation of this article were obtained from the Alzheimer’s Disease Neuroimaging Initiative (ADNI) database (adni.loni.usc.edu). As such, the investigators within the ADNI contributed to the design and implementation of ADNI and/or provided data but did not participate in the analysis or writing of this report. A complete listing of ADNI investigators can be found at: http://adni.loni.usc.edu/wp-content/uploads/how_to_apply/ADNI_Acknowledgement_List.pdf
 
-# References
+## References
 
 1. Vasanthakumar, A. et al. Harnessing peripheral DNA methylation differences in the Alzheimer's Disease Neuroimaging Initiative (ADNI) to reveal novel biomarkers of disease. Clin Epigenetics 12, 84 (2020).
