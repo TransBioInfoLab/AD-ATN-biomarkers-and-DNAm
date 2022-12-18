@@ -42,7 +42,7 @@ For pathway analysis, we used a robust rank aggregation method to perform the an
 
 ### 4. Integrative methylation-to-gene expression analysis
 
-To evaluate the DNA methylation effect on the gene expression of nearby genes, we analyzed matched gene expression (Affymetrix Human GenomeU 219 array) and DNA methylation (EPIC array) in ADNI data. To associate genes with DNA methylation sites, we used the MethReg R package and considered CpGs located in the promoter regions and distal regions separate.
+To evaluate the DNA methylation effect on the gene expression of nearby genes, we analyzed matched gene expression (Affymetrix Human GenomeU 219 array) and DNA methylation (EPIC array) in ADNI data. To associate genes with DNA methylation sites, we used the *MethReg* R package and considered CpGs located in the promoter regions and distal regions separate.
 
 | File |  Link |
 |---------------------|-------------|
