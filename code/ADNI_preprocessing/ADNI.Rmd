@@ -1,0 +1,836 @@
+---
+title: "Distinct CSF biomarker-associated DNA methylation in Alzheimer's disease and cognitively normal subjects"
+subtitle: "ADNI dataset preprocessing" 
+author: "Wei Zhang, Lily Wang"
+date: "`r Sys.Date()`"
+output:
+  rmarkdown::html_document:
+    highlight: pygments
+    theme: yeti
+    toc: true
+    number_sections: true
+    df_print: paged
+    code_download: false
+    toc_float:
+      collapsed: yes
+    toc_depth: 3
+editor_options:
+  chunk_output_type: inline    
+---
+
+```{r setup, include=FALSE, message = F}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(SummarizedExperiment)
+library(ExperimentHub)
+library(minfi)
+library(wateRmelon)
+library(DMRcate)
+library(readxl)
+library(RPMM)
+library(readr)
+library(stringr)
+cohort <- "ADNI"
+dir.base <- "."
+dir.base.data <- file.path(dir.base,"../AD-meta-analysis-blood-samples/")
+dir.data <- file.path(dir.base.data,"datasets/",cohort,"/data/DNA_methylation") 
+dir.data.processed <- file.path(dir.base.data,"datasets/",cohort,"/data/DNA_methylation/processed") 
+dir.data.clinical <- file.path(dir.base.data,"datasets/",cohort,"/data/clinical") 
+dir.data.new <- file.path(dir.base, "data/ADNI/")
+dir.data.new.processed <- file.path(dir.data.new, "/DNA_methylation/processed/")
+dir.data.processed_BMIQ <- file.path(dir.data.new.processed, "BMIQ")
+dir.data.new.clinical <- file.path(dir.data.new, "/clinical/")
+dir.data.new.pca <- file.path(dir.data.new, "/DNA_methylation/pca_filtering/")
+for(p in grep("dir",ls(),value = T)) dir.create(get(p),recursive = TRUE,showWarnings = FALSE)
+```
+
+# Load previous data and pre-processing
+
+```{R, load_bs_filtered_min_65, include = T}
+load(file.path(dir.data.processed,"RGSet_bs_filtered_min_age_at_visit_65.rda"))
+load(file.path(dir.data.processed,"detectionP_passed_probes.rda"))
+nb.probes.before.norm <- nrow(RGSet.bs.filtered.min.age_at_visit.65)
+```
+
+
+## Probes QC
+
+```{R, eval = FALSE}
+betaSet <- getBeta(RGSet.bs.filtered.min.age_at_visit.65)
+rm(RGSet.bs.filtered.min.age_at_visit.65)
+gc()
+betaSet <- betaSet[rownames(betaSet) %in% passedProbes, ]
+betaSet <- betaSet[grep("cg",rownames(betaSet)),]
+
+# snapshotDate(): 2021-03-30
+betaSet <- rmSNPandCH(
+  object = betaSet,
+  dist = 5,
+  mafcut = 0.01,
+  and = TRUE,
+  rmcrosshyb = TRUE,
+  rmXY = TRUE
+)
+```
+
+```{R, eval = FALSE}
+save(
+  betaSet, 
+  clinical.filtered.min.age_at_visit.65,
+  file = file.path(dir.data.new.processed,"RGSet_bs_filtered_min_age_at_visit_65_before_norm_with_smoke_probes.rda")
+)
+```
+
+## Samples QC
+
+### Quantile normalization
+
+```{r eval = F, echo = F}
+load(
+  file.path(dir.data.new.processed,"RGSet_bs_filtered_min_age_at_visit_65_before_norm_with_smoke_probes.rda")
+)
+```
+
+```{r eval = F}
+library(bigmelon)
+betaQN <- betaqn(betaSet)
+
+saveRDS(
+  betaQN, 
+  file.path(dir.data.new.processed,"betaQN_min_age_at_visit_65_with_smoke_probes.RDS")
+)
+```
+
+```{R, include = FALSE}
+betaQN <- readRDS(file.path(dir.data.new.processed,"betaQN_min_age_at_visit_65_with_smoke_probes.RDS"))
+```
+
+```{r}
+table(colSums(is.na(betaQN)))
+```
+
+```{r}
+boxplot(betaQN[,1:100])
+```
+
+### BMIQ normalization
+
+```{R, eval = TRUE}
+annotType <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19::Manifest
+annotType$designTypeNumeric <- ifelse(annotType$Type == "I",1,2)
+library(sm)
+
+betaQNCompleteCol1 <- betaQN[complete.cases(betaQN), ]
+annotTypeCompleteCol1 <- annotType[row.names(betaQNCompleteCol1), ]
+
+sm.density.compare(
+  betaQNCompleteCol1[,'200325570132_R04C01'],
+  annotTypeCompleteCol1$designTypeNumeric
+)
+sm.density.compare(
+  betaQNCompleteCol1[,1],
+  annotTypeCompleteCol1$designTypeNumeric
+)
+rm(betaQNCompleteCol1)
+rm(annotTypeCompleteCol1)
+```
+
+
+```{R, eval = FALSE}
+betaQN <- na.omit(betaQN)
+type12 <- annotType$designTypeNumeric[match(rownames(betaQN),rownames(annotType))]
+total_num <- ncol(betaQN)
+iter <- ceiling(total_num/100)
+i <- 1
+sep <- seq(1, total_num, by = 100)
+sep <- c(sep, total_num)
+
+while(i <= iter){
+  
+  set.seed (946)
+  doParallel::registerDoParallel(cores = 10)
+  betaQN_BMIQ <- plyr::adply(
+    betaQN[,(sep[i]:sep[i+1])], 2,
+    function(x){
+      tryCatch(
+        {
+          norm_ls <- BMIQ(x, design.v = type12, plots = FALSE)
+          return (norm_ls$nbeta)
+        }, warning = function(w){message("warning");return(NULL)}
+      )
+    },.progress = "time",.parallel = T, .expand = F
+  ) %>% column_to_rownames("X1") %>% t()
+  
+  rownames(betaQN_BMIQ) <- rownames(betaQN)
+  
+  message("Function completed!")
+  
+  saveRDS(
+    betaQN_BMIQ, 
+    file.path(
+      dir.data.processed_BMIQ,paste0("ADNI_QNBMIQ_min_age_at_visit_65_with_smoke_probes", i, ".RDS")
+    )
+  )
+  
+  message("Saving completed!")
+  
+  i = i + 1
+}
+
+betaQN_BMIQ_all <- list.files(
+  file.path(dir.data.processed_BMIQ), pattern = ".RDS", full.names = T
+) %>% map(readRDS) 
+betaQN_BMIQ <- betaQN_BMIQ_all %>% bind_cols()
+
+saveRDS(betaQN_BMIQ, file.path(dir.data.new.processed, "ADNI_QNBMIQ_min_age_at_visit_65_with_smoke_probes.RDS"))
+```
+
+
+```{r}
+betaQN_BMIQ <- readRDS(file.path(dir.data.new.processed, "ADNI_QNBMIQ_min_age_at_visit_65_with_smoke_probes.RDS"))
+```
+
+```{r}
+clinical <- read_csv(
+  "~/TBL Dropbox/Wei Zhang/AD-meta-analysis-blood-samples/datasets/ADNI/data/ADNI_Se_colData.csv"
+)
+```
+
+```{r}
+plyr::count(clinical %>% filter(!barcodes %in% colnames(betaQN_BMIQ)) %>% pull(DX))
+```
+
+```{r}
+clinical %>% filter(!barcodes %in% colnames(betaQN_BMIQ))
+```
+
+```{r}
+library(EpiDISH)
+data(centDHSbloodDMC.m)
+BloodFrac.m <- epidish(beta.m = betaQN_BMIQ, ref.m = centDHSbloodDMC.m, method = "RPC")$estF
+```
+
+### Summarize Experiment
+
+```{R, eval = FALSE}
+ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs <- readr::read_csv(
+  file.path(dir.data,"ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs.csv")
+) 
+medhist <- readr::read_csv(file.path(dir.data.clinical, "MEDHIST.csv"))
+ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$ID <- paste0(     
+  ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$RID,
+  ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$Phase,
+  ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$Edate
+)
+dnam.rid <- ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$ID[match(
+  colnames(betaQN_BMIQ), ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$barcodes
+  )
+]
+
+clinical <- readr::read_csv(file.path(dir.data.clinical,"ADNIMERGE_downloaded_3-1-2021.csv"))
+# clinical$DIAGNOSIS <- clinical$DX
+clinical$ID <- paste0(clinical$RID,clinical$COLPROT,clinical$EXAMDATE)
+clinical$ID2 <- paste0(clinical$RID,clinical$COLPROT,clinical$VISCODE)
+# it seems some samples do not have clinical data ?
+dnam.rid <- dnam.rid[dnam.rid %in% clinical$ID] 
+clinical <- clinical[match(dnam.rid,clinical$ID),]
+
+
+clinical$PlateNumber <- ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$PlateNumber[
+  match(clinical$ID,ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$ID)
+]
+clinical$bisulfiteConversion <- ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$bisulfiteConversion[
+  match(clinical$ID,ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$ID)
+]
+clinical$Array  <- ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$Array[
+  match(clinical$ID,ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$ID)
+]
+
+clinical$barcodes  <- ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$barcodes[
+  match(clinical$ID,ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$ID)
+]
+
+clinical$DateDrawn <- ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$DateDrawn[
+  match(clinical$ID,ADNI_DNA_Methylation_SampleAnnotation_20170530_with_bs$ID)
+]
+
+clinical = as.data.frame(clinical)
+BloodFrac.m = as.data.frame(BloodFrac.m)
+rownames(clinical) <- clinical$barcodes
+
+clinical <- merge(
+  clinical, 
+  BloodFrac.m,
+  by.x = "row.names",
+  by.y = "row.names",
+  sort = FALSE
+)
+clinical$PlateNumber <- factor(clinical$PlateNumber)
+rownames(clinical) <- clinical$Row.names
+clinical$Row.names <- NULL
+
+demo <- readr::read_csv(file.path(dir.data.clinical,"PTDEMOG_3-1-2021.csv"))
+clinical$birth_month <- demo$PTDOBMM[match(clinical$RID, demo$RID)]
+clinical$birth_year <- demo$PTDOBYY[match(clinical$RID, demo$RID)]
+
+# we don't have the day so we set to one
+library(lubridate)
+clinical$age_at_visit <- interval(
+  as.Date(paste0(clinical$birth_month,"/1/",clinical$birth_year), "%m/%d/%Y"),
+  clinical$DateDrawn
+) %>% time_length(unit = "years")
+
+# Get Smoking Hist
+smoke_hist <- medhist %>% group_by(RID) %>% 
+  mutate(Smok_hist = max(MH16SMOK)) %>% 
+  dplyr::select(RID, Smok_hist) %>% unique()
+clinical <- left_join(clinical, smoke_hist, by = c('RID'))
+rownames(clinical) <- clinical$barcodes
+
+clinical <-  clinical %>% dplyr::select(
+  c(barcodes, 
+    RID, 
+    COLPROT,
+    VISCODE, 
+    PTGENDER, 
+    PTEDUCAT,
+    DateDrawn,
+    DX, 
+    PlateNumber,
+    birth_year,
+    birth_month,
+    age_at_visit, 
+    bisulfiteConversion,
+    B, 
+    NK,   
+    CD4T, 
+    CD8T,   
+    Mono,   
+    Neutro, 
+    Eosino, 
+    APOE4,
+    Smok_hist
+  ))
+
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(S4Vectors)
+epic.hg19 <- getAnnotation(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+epic.hg19.gr <- epic.hg19 %>% makeGRangesFromDataFrame(
+  start.field = "pos", end.field = "pos",keep.extra.columns = T
+)
+
+betaQN_BMIQ <- betaQN_BMIQ[rownames(betaQN_BMIQ) %in% names(epic.hg19.gr),]
+rowData <- epic.hg19.gr[rownames(betaQN_BMIQ),]
+data <- betaQN_BMIQ[,colnames(betaQN_BMIQ) %in% rownames(clinical)]
+data <- as.matrix(data[,rownames(clinical)])
+
+adni.se <- SummarizedExperiment::SummarizedExperiment(
+  assays = SimpleList("DNAm" = data),
+  rowData = rowData,
+  metadata = list("genome" = "hg19"),
+  colData = clinical
+)
+
+saveRDS(adni.se, file = file.path(dir.data.new.processed,"adni_se_min_age_at_visit_65_with_smoke_probes.RDS"))
+readr::write_csv(clinical %>% as.data.frame, 
+                 file = file.path(dir.data.new.clinical,"ADNI_Se_colData_with_smoke_probes.csv"))
+```
+
+
+# Outliers detection - PCA analysis
+
+Description: 
+
+1. Estimate standard deviation for each probe
+2. Select most variable probes (e.g. n = 50,000)
+3. PCA plot
+4. Filter outliers
+
+
+```{R load_plot_pca}
+adni.se <- readRDS(file.path(dir.data.new.processed,"adni_se_min_age_at_visit_65_with_smoke_probes.RDS"))
+### transform to m values
+pheno_df <- colData(adni.se) %>% as.data.frame
+pheno_df$sample <- colnames(adni.se)
+nb.samples.before.pca <- ncol(adni.se)
+source(file.path(dir.base, "code/Utility/PCA.R"))
+```
+
+
+```{R, eval = FALSE}
+betaOrd_mat <- OrderDataBySd(SummarizedExperiment::assay(adni.se)) 
+pca <- prcomp(
+  t(betaOrd_mat[1:50000,]),
+  center = TRUE,
+  scale = TRUE
+)
+d <- data.frame(PC1 = pca$x[, 1], PC2 = pca$x[, 2])
+meanPC1 <- mean (d$PC1)
+sdPC1   <- sd (d$PC1)
+meanPC2 <- mean (d$PC2)
+sdPC2   <- sd (d$PC2)
+out3sdPC1_1 <- meanPC1 - 3*sdPC1
+out3sdPC1_2 <- meanPC1 + 3*sdPC1
+out3sdPC2_1 <- meanPC2 - 3*sdPC2
+out3sdPC2_2 <- meanPC2 + 3*sdPC2
+d$outlier_PC1[d$PC1 >= out3sdPC1_1 & d$PC1 <= out3sdPC1_2] <- 0
+d$outlier_PC1[d$PC1 < out3sdPC1_1 | d$PC1 > out3sdPC1_2] <- 1
+d$outlier_PC2[d$PC2 >= out3sdPC2_1 & d$PC2 <= out3sdPC2_2] <- 0
+d$outlier_PC2[d$PC2 < out3sdPC2_1 | d$PC2 > out3sdPC2_2] <- 1
+write.csv(d, file.path(dir.data.new.pca, "ADNI_PCs_usingBetas_min_age_at_visit_65_with_smoke_probes.csv"))
+saveRDS(pca, file.path(dir.data.new.pca,"ADNI_PCA_model_usingBetas_min_age_at_visit_65_with_smoke_probes.RDS"))
+```
+
+## PCA plot
+
+```{R pca_plot, eval = TRUE, warning = F}
+pca <- readRDS(file.path(dir.data.new.pca,"ADNI_PCA_model_usingBetas_min_age_at_visit_65_with_smoke_probes.RDS"))
+library(ggplot2)
+library(ggrepel)
+### beta values
+byStatus <- plotPCA(
+  pca = pca,
+  dataset = "ADNI: beta values",
+  pheno = pheno_df,
+  group_char = "DX",
+  ntop = 50000
+)
+bySex <- plotPCA(
+  pca = pca,
+  dataset = "ADNI: beta values",
+  pheno = pheno_df,
+  group_char = "PTGENDER",
+  ntop = 50000
+)
+pheno_df$PlateNumber <- as.factor(pheno_df$PlateNumber)
+byPLATE <- plotPCA(
+  pca = pca,
+  dataset = "ADNI: beta values",
+  pheno = pheno_df,
+  group_char = "PlateNumber",
+  ntop = 50000
+)
+```
+
+## Filter samples by PCA 
+```{R save_pca, eval = FALSE}
+d <- read.csv(file.path(dir.data.new.pca, "ADNI_PCs_usingBetas_min_age_at_visit_65_with_smoke_probes.csv"), row.names = 1)
+noOutliers <- d[which(d$outlier_PC1 == 0 & d$outlier_PC2 == 0), ]
+adni.se <- adni.se[, rownames(noOutliers)]
+saveRDS(adni.se, file.path(dir.data.new.pca, "ADNI_QNBMIQ_PCfiltered_min_age_at_visit_65_with_smoke_probes.RDS"))
+writexl::write_xlsx(
+  colData(adni.se) %>% as.data.frame(),
+  path =  file.path(dir.data.new.clinical, "ADNI_QNBMIQ_PCfiltered_min_age_at_visit_65_with_smoke_probes.xlsx")
+)
+```
+
+
+```{R, include = FALSE}
+rm(betaOrd_mat)
+gc()
+```
+
+# Match CSF array
+
+
+```{r eval = F}
+dir.CSF <- file.path(dir.data, "../CSF_biomarkers_downloaded_8-18-2022/")
+## Some ABETA > 1700 were recalculated in comments. Grab the values in comments first
+csf <- readr::read_csv(
+  file.path(dir.CSF, "UPENNBIOMK9_04_19_17.csv")
+)
+csf2 <- csf %>% mutate(
+  ABETA = ifelse(ABETA == ">1700", str_extract(csf$COMMENT,"[[:digit:]]+"), str_extract(ABETA,"[[:digit:]]+")) %>% as.numeric(),
+  TAU = str_extract(TAU,"[[:digit:]]+") %>% as.numeric(),
+  PTAU = str_extract(PTAU,"[[:digit:]]+") %>% as.numeric()
+)
+csf2 <- csf2 %>% dplyr::select(
+  RID,VISCODE2, ABETA, TAU, PTAU
+) %>% unique()
+csf2$VISCODE <- csf2$VISCODE2
+csf2$VISCODE2 <- NULL
+
+clinical <- colData(adni.se) %>% as.data.frame()
+
+clinical.with.csf <- inner_join(
+  clinical, csf2,
+  by = c("RID","VISCODE")
+) 
+rownames(clinical.with.csf) <- clinical.with.csf$barcodes
+
+## Log2 and scale transformation 
+clinical.with.csf <- clinical.with.csf %>% mutate(
+  log_ABETA = scale(log2(ABETA), scale = F) %>% as.numeric,
+  log_TAU = scale(log2(TAU), scale = F) %>% as.numeric,
+  log_PTAU = scale(log2(PTAU), scale = F) %>% as.numeric
+)
+clinical.with.csf
+
+data <- adni.se[,rownames(clinical.with.csf)]
+colData(data) <- DataFrame(clinical.with.csf, row.names = rownames(clinical.with.csf))
+
+saveRDS(data, file = file.path(dir.data.new.pca,"ADNI_QNBMIQ_PCfiltered_min_age_at_visit_65_with_smoke_probes_and_CSF.RDS"))
+readr::write_csv(clinical.with.csf %>% as.data.frame, 
+                 file = file.path(dir.data.new.clinical,"ADNI_QNBMIQ_PCfiltered_colData_with_smoke_probes_and_CSF.csv"))
+```
+
+```{r message = F}
+clinical.with.csf <- readr::read_csv(
+  file.path(dir.data.new.clinical,"ADNI_QNBMIQ_PCfiltered_colData_with_smoke_probes_and_CSF.csv")
+)
+nb.samples.after.matched.csf <- nrow(clinical.with.csf)
+```
+
+```{r echo = F}
+clinical.with.csf %>% DT::datatable(
+  filter = 'top',
+  rownames = F,
+  style = 'auto',
+  options = list(scrollX = TRUE, 
+                 dom = 'Bfrtip',
+                 buttons = I('colvis'),
+                 keys = TRUE, 
+                 pageLength = 10), 
+  extensions = 'Buttons'
+)
+```
+
+```{r}
+clinical.with.csf %>% group_by(DX) %>%
+  summarise(
+    "ABETA mean" = mean(ABETA), 
+    "ABETA sd" = sd(ABETA), 
+    n = n()
+  ) %>%
+  bind_rows(summarise(., across(-c(DX,n), mean), across(n, sum)))
+```
+
+```{r}
+clinical.with.csf %>% group_by(DX) %>%
+  summarise(
+    "TAU mean" = mean(TAU), 
+    "TAU sd" = sd(TAU), 
+    n = n()
+  ) %>%
+  bind_rows(summarise(., across(-c(DX,n), mean), across(n, sum)))
+```
+
+```{r}
+clinical.with.csf %>% group_by(DX) %>%
+  summarise(
+    "PTAU mean" = mean(PTAU), 
+    "PTAU sd" = sd(PTAU), 
+    n = n()
+  ) %>%
+  bind_rows(summarise(., across(-c(DX,n), mean), across(n, sum)))
+```
+
+
+## Count samples exceed upper/lower limit
+
+### ABETA
+
+```{r}
+plyr::count(clinical.with.csf$ABETA >= 1700)
+plyr::count(clinical.with.csf$ABETA <= 200)
+```
+
+
+### TAU
+
+```{r}
+plyr::count(clinical.with.csf$TAU >= 1300)
+plyr::count(clinical.with.csf$TAU <= 80)
+```
+
+### PTAU
+
+```{r}
+plyr::count(clinical.with.csf$PTAU >= 120)
+plyr::count(clinical.with.csf$PTAU <= 8)
+```
+
+## Density plot
+
+### Before log and center
+
+#### Abeta
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = ABETA)) + 
+  geom_histogram(aes(y = ..density..), color = "black", fill = "white", binwidth = 100) + 
+  theme_classic() +
+  geom_density(alpha=.2, fill="grey")
+```
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = ABETA)) + 
+  geom_histogram(aes(y = ..density..,color = DX), position = "identity", fill = "white") + 
+  theme_classic() +
+  geom_density(aes(fill = DX, color = DX), alpha = .2 )
+```
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = ABETA)) + 
+  geom_histogram(aes(color = DX), position = "identity", fill = "white") + 
+  theme_classic() +
+  facet_grid(~DX)
+```
+
+#### TAU
+
+```{r echo = F, message = F, warning=F}
+ggplot(clinical.with.csf, aes(x = TAU)) + 
+  geom_histogram(aes(y = ..density..), color = "black", fill = "white", binwidth = 30) + 
+  theme_classic() +
+  geom_density(alpha=.2, fill="grey")
+```
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = TAU, group = DX)) + 
+  geom_histogram(aes(y = ..density.., color = DX), position = "identity", fill = "white", binwidth = 30) + 
+  theme_classic() +
+  geom_density(aes(fill = DX, color = DX), alpha=.2)
+```
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = TAU)) + 
+  geom_histogram(aes(color = DX), position = "identity", fill = "white") + 
+  theme_classic() +
+  facet_grid(~DX)
+```
+
+#### PTAU
+
+```{r echo = F, message = F, warning=F}
+ggplot(clinical.with.csf, aes(x = PTAU)) + 
+  geom_histogram(aes(y = ..density..), color = "black", fill = "white", binwidth = 3) + 
+  theme_classic() +
+  geom_density(alpha=.2, fill="grey")
+```
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = PTAU, group = DX)) + 
+  geom_histogram(aes(y = ..density.., color = DX), position = "identity", fill = "white", binwidth = 3) + 
+  theme_classic() +
+  geom_density(aes(fill = DX, color = DX), alpha=.2)
+```
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = PTAU)) + 
+  geom_histogram(aes(color = DX), position = "identity", fill = "white") + 
+  theme_classic() +
+  facet_grid(~DX)
+```
+
+### After log and center
+
+#### ABETA
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = log_ABETA)) + 
+  geom_histogram(aes(y = ..density..), color = "black", fill = "white", binwidth = .1) + 
+  theme_classic() +
+  geom_density(alpha=.2, fill="grey")
+```
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = log_ABETA, group = DX)) + 
+  geom_histogram(aes(y = ..density.., color = DX), position = "identity", fill = "white", binwidth = .1) + 
+  theme_classic() +
+  geom_density(aes(fill = DX, color = DX), alpha=.2)
+```
+
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = log_ABETA)) + 
+  geom_histogram(aes(color = DX), position = "identity", fill = "white") + 
+  theme_classic() +
+  facet_grid(~DX)
+```
+
+#### TAU
+
+```{r echo = F, message = F, warning=F}
+ggplot(clinical.with.csf, aes(x = log_TAU)) + 
+  geom_histogram(aes(y = ..density..), color = "black", fill = "white", binwidth = .1) + 
+  theme_classic() +
+  geom_density(alpha=.2, fill="grey")
+```
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = log_TAU, group = DX)) + 
+  geom_histogram(aes(y = ..density.., color = DX), position = "identity", fill = "white", binwidth = .1) + 
+  theme_classic() +
+  geom_density(aes(fill = DX, color = DX), alpha=.2)
+```
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = log_TAU)) + 
+  geom_histogram(aes(color = DX), position = "identity", fill = "white") + 
+  theme_classic() +
+  facet_grid(~DX)
+```
+
+#### PTAU
+
+```{r echo = F, message = F, warning=F}
+ggplot(clinical.with.csf, aes(x = log_PTAU)) + 
+  geom_histogram(aes(y = ..density..), color = "black", fill = "white", binwidth = .1) + 
+  theme_classic() +
+  geom_density(alpha=.2, fill="grey")
+```
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = log_PTAU, group = DX)) + 
+  geom_histogram(aes(y = ..density.., color = DX), position = "identity", fill = "white", binwidth = .1) + 
+  theme_classic() +
+  geom_density(aes(fill = DX, color = DX), alpha=.2)
+```
+
+```{r echo = F, message = F}
+ggplot(clinical.with.csf, aes(x = log_PTAU)) + 
+  geom_histogram(aes(color = DX), position = "identity", fill = "white") + 
+  theme_classic() +
+  facet_grid(~DX)
+```
+
+
+# Summary after QC steps
+
+## Data and metadata
+```{R}
+adni.se <- readRDS(file.path(dir.data.new.pca, "ADNI_QNBMIQ_PCfiltered_min_age_at_visit_65_with_smoke_probes.RDS"))
+nb.samples.after.pca <- ncol(adni.se)
+nb.probes.after.norm <- nrow(adni.se)
+```
+
+
+
+## Numbers of samples and probes removed in each step
+
+
+```{R, eval = TRUE, echo=FALSE}
+df.samples <- data.frame(
+  "Number of samples" =  c(
+    nb.samples.before.pca, 
+    nb.samples.after.pca,
+    nb.samples.after.matched.csf
+  ),
+  "Description" = c(
+    "Number of samples before PCA",
+    "Number of samples after PCA",
+    "Number of samples after matched CSF"
+  )
+)    
+df.samples 
+```
+
+```{R eval = TRUE, echo=FALSE}
+# Create summary table
+df.probes <- data.frame(
+  "Number of probes" = c(
+    nb.probes.before.norm,
+    length(passedProbes),
+    nb.probes.after.norm
+  ),
+  "Description" = c(
+    "total number of probes in raw data",
+    "probes with detection P < 0.01 for AD and CN samples",
+    "only probes that start with cg, no crosshyb, no X, no Y, with smoking probes, mafcut = 0.01"
+  )
+)
+df.probes %>% gt::gt() 
+```
+
+```{r}
+rm(adni.se)
+```
+
+# Checking the data
+
+```{R}
+se <- readRDS(file.path(dir.data.new.pca,"ADNI_QNBMIQ_PCfiltered_min_age_at_visit_65_with_smoke_probes_and_CSF.RDS"))
+```
+
+## show probes not starting with cg are removed
+```{R check_cg}
+grep("cg",rownames(se),invert = T)
+```
+
+## show probes on X/Y are removed
+```{R check_xy}
+c("chrX", "chrY") %in% (seqnames(se) %>% as.character())
+```
+
+## show probes with SNP with MAF >= 0.01 and in the last 5bp were removed (compared with DMRcateData package probes)
+```{R}
+eh <- ExperimentHub()
+snpsall <- eh[["EH3130"]]
+any(snpsall$probe[snpsall$mafs > 0.01 & snpsall$distances <= 5] %>% as.character() %in% rownames(se)) 
+crosshyb <- eh[["EH3129"]]
+any(crosshyb %in% rownames(se))
+XY.probes <- eh[["EH3131"]]
+any(XY.probes %in% rownames(se)) 
+```
+
+## select a few smoking probes, and show they are included
+```{R}
+any(
+  c("cg16145216", "cg19406367",
+    "cg05603985", "cg10768063",
+    "cg14099685", "cg12513616",
+    "cg04085571", "cg23648810"
+  ) %in% rownames(se)
+)
+```
+
+## show quantiles for each sample is the same
+```{R quantile_box_plot}
+boxplot(assay(se[,1:10]))
+plyr::adply(assay(se[,1:10]),.margins = 2,.fun = function(x){quantile(x, na.rm = T)})
+```
+
+
+## check cell type proportions adds up to 1
+```{R}
+table(rowSums(colData(se)[,c("B","NK","CD4T","CD8T","Mono","Neutro","Eosino")] %>% as.matrix()))
+```
+
+
+## check outliers samples are not in datset anymore
+```{R}
+outliers <- read_csv(file.path(dir.data.new.pca, "ADNI_PCs_usingBetas_min_age_at_visit_65_with_smoke_probes.csv"),
+                            col_types = readr::cols()) %>%
+  dplyr::filter(outlier_PC1 == 1 | outlier_PC2 == 1) %>% pull(1) 
+head(outliers)
+head(colnames(se))
+any(outliers %in% colnames(se))
+```
+
+
+## for one sample, check distribution of type I and type II probes
+```{R checking_part2, eval = TRUE}
+library(sm)
+
+annotType <- IlluminaHumanMethylationEPICanno.ilm10b4.hg19::Manifest
+annotType$designTypeNumeric <- ifelse(annotType$Type == "I",1,2)
+probes <- assay(se)[,1] %>% na.omit()
+sm.density.compare(
+  probes,
+  annotType[names(probes),]$designTypeNumeric
+)
+
+probes <- assay(se)[,2] %>% na.omit()
+sm.density.compare(
+  probes,
+  annotType[names(probes),]$designTypeNumeric
+)
+```
+
+
+
+```{r}
+devtools::session_info()
+```
+

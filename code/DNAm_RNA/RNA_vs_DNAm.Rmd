@@ -1,0 +1,535 @@
+---
+title: "Distinct CSF biomarker-associated DNA methylation in Alzheimer's disease and cognitively normal subjects"
+subtitle: "Correlation with gene expression"
+author: "Wei Zhang, Lily Wang"
+date: "`r Sys.Date()`"
+output:
+  rmarkdown::html_document:
+    highlight: pygments
+    theme: yeti
+    toc: true
+    number_sections: true
+    df_print: paged
+    code_download: false
+    toc_float:
+      collapsed: yes
+    toc_depth: 3
+editor_options:
+  chunk_output_type: inline    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+cohort <- "ADNI"
+dir.base <- "."
+dir.data <- file.path(dir.base,"data/",cohort,"/DNA_methylation") 
+dir.data.pca <- file.path(dir.data,"/pca_filtering/") 
+dir.data.auc <- file.path(dir.base,"data/Aux_Sync/") 
+dir.results <- file.path(dir.base, "analysis-results/ADNI/LM/")
+dir.results.adj <- file.path(dir.results, "adjusted/")
+dir.combp.results <- file.path(dir.base, "analysis-results/comb-p/")
+dir.RNA_vs_DNAm <- file.path(dir.base,"/analysis-results/RNA_vs_DNAm/")
+for(p in grep("dir",ls(),value = T)) dir.create(get(p),recursive = TRUE,showWarnings = FALSE)
+```
+
+# Load packages and results
+
+```{r message = F}
+library(tidyverse)
+library(SummarizedExperiment)
+library(MethReg)
+library(data.table)
+library(xCell)
+```
+
+
+```{r message = F}
+## Load regression results
+DX <- c("AD","CN")
+file.list.lm.names <- list.files(
+  path = dir.results.adj,
+  pattern = paste0(DX, "_results",collapse = "|"),
+  full.names = T,
+  recursive = T
+)
+
+file.list.lm <- file.list.lm.names %>% map(~readr::read_csv(.))
+
+names(file.list.lm) <- unlist(
+  paste0(
+    "ADNI",
+    file.list.lm.names %>% map(~stringr::str_match(.,"_AD|_CN")),
+    file.list.lm.names %>% map(~stringr::str_extract(.,"_ABETA|_PTAU|_TAU"))
+  )
+)
+
+single.sig.cpgs <- file.list.lm %>% map(~filter(., pValue.bacon.z < 1e-05)) %>% 
+  rbindlist(.,idcol = "ID") %>% mutate(ID = gsub("ADNI_","",ID)) %>% 
+  separate(ID, into = c("Sample", "CSF"), sep = "_",  remove = T)
+## Load comb-p DMR results
+load(file.path(dir.combp.results,"ADNI_all_DMR_annotated_filtered_zsidakp_zp_same_direction_results.rda"))
+dmr.sig.cpgs <- dmr.filter.list %>% 
+  rbindlist(.,idcol = "ID") %>% mutate(ID = gsub("ADNI_","",ID)) %>% 
+  separate(ID, into = c("Sample", "CSF"), sep = "_",  remove = T)
+```
+
+
+# DNAm to RNA association
+
+```{r}
+## Aux function
+auxfunction <- function(
+  row,
+  exp = NULL,
+  dnam = NULL
+){
+  
+  rna.target <- exp[which(rownames(exp) == row$target), , drop = FALSE]
+  met <- dnam[which(rownames(dnam) == as.character(row$regionID)), , drop = FALSE]
+  
+  data <- data.frame(
+    "met.residual" = met %>% as.numeric(),
+    "rna.target.residual" = rna.target %>% as.numeric()
+  )
+  
+  results <- lm(rna.target.residual ~ met.residual, data = data) %>% summary %>% coef %>% data.frame
+  
+  return(results[2,])
+}
+
+add_cpgs_from_and_do_fdr <- function(results, analysis = "AD"){
+  
+  results$probeID <- ifelse(is.na(results$probeID), "DMR", results$probeID)
+  results.in.cpg <- results[grep("^cg", results$probeID),]
+  results.in.dmr <- results[-grep("^cg", results$probeID),]
+  
+  single.sig.cpgs.in.results <- single.sig.cpgs %>% 
+    filter(Sample == analysis & cpg %in% results.in.cpg$probeID) %>% 
+    group_by(cpg) %>% 
+    mutate(sig.associate.csf = paste0(CSF, collapse = ",")) %>%
+    dplyr::select(cpg, sig.associate.csf) %>% unique
+  
+  results.in.cpg$sig.associate.csf <- single.sig.cpgs.in.results[match(
+    results.in.cpg$probeID, single.sig.cpgs.in.results$cpg
+  ),] %>% pull(sig.associate.csf)
+  
+  sig.dmr.in.results <- dmr.sig.cpgs %>% 
+    filter(Sample == analysis & region %in% results.in.dmr$region) %>% 
+    group_by(region) %>% 
+    mutate(sig.associate.csf = paste0(CSF, collapse = ",")) %>%
+    dplyr::select(region, sig.associate.csf) %>% unique
+  
+  results.in.dmr$sig.associate.csf <- sig.dmr.in.results[match(
+    results.in.dmr$region, sig.dmr.in.results$region
+  ),] %>% pull(sig.associate.csf)
+  
+  results.in.cpg$fdr <- p.adjust(results.in.cpg$`Pr...t..`, method = "fdr")
+  results.in.dmr$fdr <- p.adjust(results.in.dmr$`Pr...t..`, method = "fdr")
+  results <- rbind(results.in.cpg, results.in.dmr)
+  
+  return(results)
+}
+```
+
+
+## AD samples
+
+```{r}
+load(file.path(dir.data.auc,"ADNI_AD_matched_rna_dnam_residuals.rda"))
+```
+
+```{r}
+### Select Significant results
+single.sig.cpgs.ad <- single.sig.cpgs %>% filter(Sample == "AD")
+dmr.ad <- dmr.sig.cpgs %>% filter(Sample == "AD") %>% pull(region)
+sig.cpgs.dmr.ad <- c(single.sig.cpgs.ad$cpg, dmr.ad) %>% unique
+length(sig.cpgs.dmr.ad) #228
+```
+
+### Promoter analysis
+
+```{r}
+# -------------------------------------------------------------------------------
+# Promoter analysis, triplets using remap
+# -------------------------------------------------------------------------------
+dnam <- MethReg:::map_probes_to_regions(
+  dnam = residuals.matched.met[grep("^cg",rownames(residuals.matched.met)),],
+  genome = "hg19",
+  arrayType = "EPIC",
+  rm.masked.probes = FALSE
+)
+EPIC.hg19 <- MethReg:::get_met_probes_info(genome = "hg19", arrayType = "EPIC")
+dnam <- rbind(dnam,residuals.matched.met[-grep("^cg",rownames(residuals.matched.met)),])
+promoter.gene.dnam.pair <- MethReg::get_region_target_gene(
+  rownames(dnam) %>% MethReg::make_granges_from_names(),
+  method = "genes.promoter.overlap",
+  genome = "hg19"
+)
+table((promoter.gene.dnam.pair$regionID %>% unique()) %in% make_names_from_granges(EPIC.hg19[single.sig.cpgs.ad$cpg]))
+```
+
+```{r}
+nrow(promoter.gene.dnam.pair) # 144
+promoter.gene.dnam.pair <- promoter.gene.dnam.pair %>% dplyr::filter(.data$target %in% rownames(residuals.matched.exp))
+nrow(promoter.gene.dnam.pair) # 81
+promoter.gene.dnam.pair$probeID <- names(EPIC.hg19)[match(promoter.gene.dnam.pair$regionID,make_names_from_granges(EPIC.hg19))]
+promoter.gene.dnam.pair <- promoter.gene.dnam.pair %>% dplyr::filter(.data$regionID %in% rownames(dnam))
+nrow(promoter.gene.dnam.pair) # 81
+results.promoter.analysis <- plyr::adply(
+  .data = promoter.gene.dnam.pair,
+  .margins = 1,
+  .fun = function(row){
+    auxfunction(row = row,exp = residuals.matched.exp, dnam = dnam)    
+  }
+)
+results.promoter.analysis <- results.promoter.analysis %>% add_cpgs_from_and_do_fdr(analysis = "AD")
+```
+
+```{r}
+results.promoter.analysis[results.promoter.analysis$fdr < 0.05,]
+```
+
+### Distal analysis
+
+```{r}
+# -------------------------------------------------------------------------------
+# Distal analysis, triplets using remap
+# -------------------------------------------------------------------------------
+distal.gene.dnam.pair <- MethReg::get_region_target_gene(
+  rownames(dnam) %>% MethReg::make_granges_from_names(),
+  method = "nearby.genes",
+  num.flanking.genes = 10,
+  rm.promoter.regions.from.distal.linking = TRUE,
+  genome = "hg19"
+)
+```
+
+```{r}
+nrow(distal.gene.dnam.pair) # 2177
+distal.gene.dnam.pair <- distal.gene.dnam.pair %>% dplyr::filter(.data$target %in% rownames(residuals.matched.exp))
+nrow(distal.gene.dnam.pair) # 690
+distal.gene.dnam.pair$probeID <- names(EPIC.hg19)[match(distal.gene.dnam.pair$regionID,make_names_from_granges(EPIC.hg19))]
+distal.gene.dnam.pair <- distal.gene.dnam.pair %>% dplyr::filter(.data$regionID %in% rownames(dnam))
+nrow(distal.gene.dnam.pair) # 690
+results.distal.analysis <- plyr::adply(
+  .data = distal.gene.dnam.pair,
+  .margins = 1,
+  .fun = function(row){
+    auxfunction(row = row,exp = residuals.matched.exp, dnam = dnam)    
+  }
+)
+results.distal.analysis <- results.distal.analysis %>% add_cpgs_from_and_do_fdr(analysis = "AD")
+```
+
+```{r}
+results.distal.analysis[results.distal.analysis$fdr < 0.05,]
+```
+
+```{r}
+results.promoter.analysis.ad <- results.promoter.analysis
+results.distal.analysis.ad <- results.distal.analysis
+promoter.analysis.ad.selected <- results.promoter.analysis.ad[results.promoter.analysis.ad$RLM_met.residual_fdr < 0.05,]
+distal.analysis.ad.selected <- results.distal.analysis.ad[results.distal.analysis.ad$RLM_met.residual_fdr < 0.05,]
+```
+
+## CN samples
+
+```{r}
+load(file.path(dir.data.auc,"ADNI_CN_matched_rna_dnam_residuals.rda"))
+```
+
+```{r}
+### Select Significant results
+single.sig.cpgs.cn <- single.sig.cpgs %>% filter(Sample == "CN")
+dmr.cn <- dmr.sig.cpgs %>% filter(Sample == "CN") %>% pull(region)
+sig.cpgs.dmr.cn <- c(single.sig.cpgs.cn$cpg, dmr.cn) %>% unique
+length(sig.cpgs.dmr.cn) #163
+```
+
+### Promoter analysis
+
+```{r}
+# -------------------------------------------------------------------------------
+# Promoter analysis, triplets using remap
+# -------------------------------------------------------------------------------
+dnam <- MethReg:::map_probes_to_regions(
+  dnam = residuals.matched.met[grep("^cg",rownames(residuals.matched.met)),],
+  genome = "hg19",
+  arrayType = "EPIC",
+  rm.masked.probes = FALSE
+)
+EPIC.hg19 <- MethReg:::get_met_probes_info(genome = "hg19", arrayType = "EPIC")
+dnam <- rbind(dnam,residuals.matched.met[-grep("^cg",rownames(residuals.matched.met)),])
+promoter.gene.dnam.pair <- MethReg::get_region_target_gene(
+  rownames(dnam) %>% MethReg::make_granges_from_names(),
+  method = "genes.promoter.overlap",
+  genome = "hg19"
+)
+table((promoter.gene.dnam.pair$regionID %>% unique()) %in% make_names_from_granges(EPIC.hg19[single.sig.cpgs.cn$cpg]))
+```
+
+```{r}
+nrow(promoter.gene.dnam.pair) # 151
+promoter.gene.dnam.pair <- promoter.gene.dnam.pair %>% dplyr::filter(.data$target %in% rownames(residuals.matched.exp))
+nrow(promoter.gene.dnam.pair) # 88
+promoter.gene.dnam.pair$probeID <- names(EPIC.hg19)[match(promoter.gene.dnam.pair$regionID,make_names_from_granges(EPIC.hg19))]
+promoter.gene.dnam.pair <- promoter.gene.dnam.pair %>% dplyr::filter(.data$regionID %in% rownames(dnam))
+nrow(promoter.gene.dnam.pair) # 88
+results.promoter.analysis <- plyr::adply(
+  .data = promoter.gene.dnam.pair,
+  .margins = 1,
+  .fun = function(row){
+    auxfunction(row = row,exp = residuals.matched.exp, dnam = dnam)    
+  }
+)
+results.promoter.analysis <- results.promoter.analysis %>% add_cpgs_from_and_do_fdr(analysis = "CN")
+```
+
+```{r}
+results.promoter.analysis[results.promoter.analysis$fdr < 0.05,]
+```
+
+### Distal analysis
+
+```{r}
+# -------------------------------------------------------------------------------
+# Distal analysis, triplets using remap
+# -------------------------------------------------------------------------------
+distal.gene.dnam.pair <- MethReg::get_region_target_gene(
+  rownames(dnam) %>% MethReg::make_granges_from_names(),
+  method = "nearby.genes",
+  num.flanking.genes = 10,
+  rm.promoter.regions.from.distal.linking = TRUE,
+  genome = "hg19"
+)
+```
+
+```{r}
+nrow(distal.gene.dnam.pair) # 1100
+distal.gene.dnam.pair <- distal.gene.dnam.pair %>% dplyr::filter(.data$target %in% rownames(residuals.matched.exp))
+nrow(distal.gene.dnam.pair) # 302
+distal.gene.dnam.pair$probeID <- names(EPIC.hg19)[match(distal.gene.dnam.pair$regionID,make_names_from_granges(EPIC.hg19))]
+distal.gene.dnam.pair <- distal.gene.dnam.pair %>% dplyr::filter(.data$regionID %in% rownames(dnam))
+nrow(distal.gene.dnam.pair) # 302
+results.distal.analysis <- plyr::adply(
+  .data = distal.gene.dnam.pair,
+  .margins = 1,
+  .fun = function(row){
+    auxfunction(row = row,exp = residuals.matched.exp, dnam = dnam)    
+  }
+)
+results.distal.analysis <- results.distal.analysis %>% add_cpgs_from_and_do_fdr(analysis = "CN")
+```
+
+```{r}
+results.distal.analysis[results.distal.analysis$fdr < 0.05,]
+```
+
+```{r}
+results.promoter.analysis.cn <- results.promoter.analysis
+results.distal.analysis.cn <- results.distal.analysis
+promoter.analysis.cn.selected <- results.promoter.analysis.cn[results.promoter.analysis.cn$RLM_met.residual_fdr < 0.05,]
+distal.analysis.cn.selected <- results.distal.analysis.cn[results.distal.analysis.cn$RLM_met.residual_fdr < 0.05,]
+```
+
+```{r}
+writexl::write_xlsx(
+  list(
+    "AD_Promoter" = results.promoter.analysis.ad,
+    "AD_Distal_10_up_10_down" = results.distal.analysis.ad,
+    "CN_Promoter" = results.promoter.analysis.cn,
+    "CN_Distal_10_up_10_down" = results.distal.analysis.cn
+  ),
+  path = file.path(dir.RNA_vs_DNAm,"AD_CN_ADNI_cpg_Target_vs_DNAm_All_CSF_lm_approach.xlsx")
+)
+```
+
+
+# Test target gene association with CSF biomarkers
+
+```{r message = F}
+load(file = file.path(dir.data.auc,"ADNI_ad_cn_matched_rna_dnam.rda"))
+pheno.with.csf <- read_csv(
+  file.path(dir.data, "../clinical/ADNI_QNBMIQ_PCfiltered_colData_with_smoke_probes_and_CSF.csv")
+) %>% group_by(RID) %>% slice_max(age_at_visit) %>% filter(DX %in% c("CN", "Dementia"))
+table(pheno.with.csf$DX)
+```
+
+```{r}
+## Aux function
+test.associate <- function(exp, metadata, csf = "log_ABETA"){
+  
+  t <- plyr::adply(
+    exp,
+    .margins = 1,
+    .fun = function(e){
+      metadata <- metadata[,c(csf, "Monocytes","CD4_T_cells","NKT","B_cells","granulocytes", "RIN",  "age_at_visit","PTGENDER","Affy_Plate", "Smok_hist", "PTEDUCAT", "APOE4")]
+      dat <- data.frame(exp = log2(e), metadata)
+      res <- lm(as.formula(paste(csf, "~.")) ,data = dat) %>% summary %>% coefficients() %>% as.data.frame()
+      
+      res[grep("exp", rownames(res)),]
+    },.progress = "time", .parallel = F)
+  
+  t$gene_symbol <- MethReg:::map_ensg_to_symbol(t[[1]])
+  t$associate.csf <- gsub("log_", "",  csf)
+  
+  return(t)
+  
+}
+```
+
+
+## AD samples
+
+```{r}
+### Match with CSF values
+pheno.with.csf$exp.id <- paste0(pheno.with.csf$RID,"_",pheno.with.csf$COLPROT,"_",pheno.with.csf$VISCODE)
+ADNI_Gene_Expression_Metadata.with.csf <- cbind(
+  ADNI_Gene_Expression_Metadata.ad[,c(1:3)],
+  ADNI_Gene_Expression_Metadata.ad[,colnames(ADNI_Gene_Expression_Metadata.ad) %in% pheno.with.csf$exp.id]
+)
+expression.matrix.with.csf <- expression.matrix.ad[,colnames(expression.matrix.ad) %in% pheno.with.csf$exp.id]
+all(colnames(expression.matrix.with.csf) == colnames(ADNI_Gene_Expression_Metadata.with.csf)[-c(1:3)])
+pheno.with.csf.ad <- pheno.with.csf[match(colnames(expression.matrix.with.csf),pheno.with.csf$exp.id),]
+all(colnames(expression.matrix.with.csf) == pheno.with.csf.ad$exp.id)
+```
+
+```{r eval = F}
+Affy_Plate <- ADNI_Gene_Expression_Metadata.with.csf[7,-c(1:3)] %>% as.numeric() %>% as.factor()
+Affy_Plate <- Affy_Plate[
+  match(
+    gsub(" ","0",formatC(stringr::str_extract(pattern = "^[0-9]*",colnames(expression.matrix.with.csf)))), 
+    stringr::str_extract(pattern = "[0-9]*$",ADNI_Gene_Expression_Metadata.with.csf[3,-c(1:3)] %>% as.character()))
+]
+
+RIN <- ADNI_Gene_Expression_Metadata.with.csf[6,-c(1:3)] %>% as.numeric()
+RIN <- RIN[
+  match(
+    gsub(" ","0",formatC(stringr::str_extract(pattern = "^[0-9]*",colnames(expression.matrix.with.csf)))), 
+    stringr::str_extract(pattern = "[0-9]*$",ADNI_Gene_Expression_Metadata.with.csf[3,-c(1:3)] %>% as.character()))
+]
+
+metadata.exp <- pheno.with.csf.ad[,c("log_ABETA", "log_PTAU", "log_TAU", "age_at_visit", "PTGENDER", "Smok_hist", "PTEDUCAT", "APOE4")]
+metadata.exp$Affy_Plate <- Affy_Plate
+metadata.exp$RIN <- RIN
+
+aux <- expression.matrix.with.csf
+rownames(aux) <- MethReg:::map_ensg_to_symbol(rownames(aux))
+xcell <- xCellAnalysis(aux)
+xcell <- xcell[c("B-cells", "NKT", "CD4+ T-cells", "Eosinophils", "Monocytes", "Neutrophils"),]
+
+metadata.exp <- cbind(metadata.exp,t(xcell))
+colnames(metadata.exp)[11] <- "B_cells"
+colnames(metadata.exp)[13] <- "CD4_T_cells"
+metadata.exp$granulocytes <- metadata.exp$Neutrophils + metadata.exp$Eosinophils
+metadata.exp$Neutrophils <- NULL
+metadata.exp$Eosinophils <- NULL
+```
+
+
+```{r eval = F}
+test.abeta <- test.associate(expression.matrix.with.csf, metadata.exp, csf = "log_ABETA")
+test.ptau <- test.associate(expression.matrix.with.csf, metadata.exp, csf = "log_PTAU")
+test.tau <- test.associate(expression.matrix.with.csf, metadata.exp, csf = "log_TAU")
+test.abeta$fdr <- p.adjust(test.abeta$`Pr(>|t|)`,"fdr")
+test.ptau$fdr <- p.adjust(test.ptau$`Pr(>|t|)`,"fdr")
+test.tau$fdr <- p.adjust(test.tau$`Pr(>|t|)`,"fdr")
+```
+
+```{r eval = F}
+selected.genes <- c(promoter.analysis.ad.selected$target_symbol, distal.analysis.ad.selected$target_symbol) %>% unique
+selected.genes.abeta <- test.abeta[test.abeta$gene_symbol %in% selected.genes,]
+selected.genes.ptau <- test.ptau[test.ptau$gene_symbol %in% selected.genes,]
+selected.genes.tau <- test.tau[test.tau$gene_symbol %in% selected.genes,]
+```
+
+
+```{r eval = F}
+writexl::write_xlsx(
+  list(
+    "target_gene" = rbind(selected.genes.abeta, selected.genes.ptau, selected.genes.tau),
+    "ABETA" = test.abeta,
+    "PTAU"= test.ptau,
+    "TAU" = test.tau
+  ),
+  file.path(dir.RNA_vs_DNAm, "AD_target_gene_association.xlsx")
+)
+```
+
+## CN samples
+
+```{r eval = F}
+### Match with CSF values
+ADNI_Gene_Expression_Metadata.with.csf <- cbind(
+  ADNI_Gene_Expression_Metadata.cn[,c(1:3)],
+  ADNI_Gene_Expression_Metadata.cn[,colnames(ADNI_Gene_Expression_Metadata.cn) %in% pheno.with.csf$exp.id]
+)
+expression.matrix.with.csf <- expression.matrix.cn[,colnames(expression.matrix.cn) %in% pheno.with.csf$exp.id]
+all(colnames(expression.matrix.with.csf) == colnames(ADNI_Gene_Expression_Metadata.with.csf)[-c(1:3)])
+pheno.with.csf.cn <- pheno.with.csf[match(colnames(expression.matrix.with.csf),pheno.with.csf$exp.id),]
+all(colnames(expression.matrix.with.csf) == pheno.with.csf.cn$exp.id)
+```
+
+```{r eval = F}
+Affy_Plate <- ADNI_Gene_Expression_Metadata.with.csf[7,-c(1:3)] %>% as.numeric() %>% as.factor()
+Affy_Plate <- Affy_Plate[
+  match(
+    gsub(" ","0",formatC(stringr::str_extract(pattern = "^[0-9]*",colnames(expression.matrix.with.csf)))), 
+    stringr::str_extract(pattern = "[0-9]*$",ADNI_Gene_Expression_Metadata.with.csf[3,-c(1:3)] %>% as.character()))
+]
+
+RIN <- ADNI_Gene_Expression_Metadata.with.csf[6,-c(1:3)] %>% as.numeric()
+RIN <- RIN[
+  match(
+    gsub(" ","0",formatC(stringr::str_extract(pattern = "^[0-9]*",colnames(expression.matrix.with.csf)))), 
+    stringr::str_extract(pattern = "[0-9]*$",ADNI_Gene_Expression_Metadata.with.csf[3,-c(1:3)] %>% as.character()))
+]
+
+metadata.exp <- pheno.with.csf.cn[,c("log_ABETA", "log_PTAU", "log_TAU", "age_at_visit", "PTGENDER", "Smok_hist", "PTEDUCAT", "APOE4")]
+metadata.exp$Affy_Plate <- Affy_Plate
+metadata.exp$RIN <- RIN
+
+aux <- expression.matrix.with.csf
+rownames(aux) <- MethReg:::map_ensg_to_symbol(rownames(aux))
+xcell <- xCellAnalysis(aux)
+xcell <- xcell[c("B-cells", "NKT", "CD4+ T-cells", "Eosinophils", "Monocytes", "Neutrophils"),]
+
+metadata.exp <- cbind(metadata.exp,t(xcell))
+colnames(metadata.exp)[11] <- "B_cells"
+colnames(metadata.exp)[13] <- "CD4_T_cells"
+metadata.exp$granulocytes <- metadata.exp$Neutrophils + metadata.exp$Eosinophils
+metadata.exp$Neutrophils <- NULL
+metadata.exp$Eosinophils <- NULL
+```
+
+
+```{r eval = F}
+test.abeta <- test.associate(expression.matrix.with.csf, metadata.exp, csf = "log_ABETA")
+test.ptau <- test.associate(expression.matrix.with.csf, metadata.exp, csf = "log_PTAU")
+test.tau <- test.associate(expression.matrix.with.csf, metadata.exp, csf = "log_TAU")
+test.abeta$fdr <- p.adjust(test.abeta$`Pr(>|t|)`,"fdr")
+test.ptau$fdr <- p.adjust(test.ptau$`Pr(>|t|)`,"fdr")
+test.tau$fdr <- p.adjust(test.tau$`Pr(>|t|)`,"fdr")
+```
+
+```{r eval = F}
+selected.genes <- c(promoter.analysis.cn.selected$target_symbol, distal.analysis.cn.selected$target_symbol) %>% unique
+selected.genes.abeta <- test.abeta[test.abeta$gene_symbol %in% selected.genes,]
+selected.genes.ptau <- test.ptau[test.ptau$gene_symbol %in% selected.genes,]
+selected.genes.tau <- test.tau[test.tau$gene_symbol %in% selected.genes,]
+```
+
+
+```{r eval = F}
+writexl::write_xlsx(
+  list(
+    "target_gene" = rbind(selected.genes.abeta, selected.genes.ptau, selected.genes.tau),
+    "ABETA" = test.abeta,
+    "PTAU"= test.ptau,
+    "TAU" = test.tau
+  ),
+  file.path(dir.RNA_vs_DNAm, "CN_target_gene_association.xlsx")
+)
+```
+
+

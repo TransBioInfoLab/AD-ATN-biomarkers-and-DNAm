@@ -1,0 +1,594 @@
+---
+title: "Distinct CSF biomarker-associated DNA methylation in Alzheimer's disease and cognitively normal subjects"
+subtitle: "Pathway Analysis -- methylGSA"
+author: "Wei Zhang, Lily Wang"
+date: "`r Sys.Date()`"
+output:
+  rmarkdown::html_document:
+    highlight: pygments
+    theme: yeti
+    toc: true
+    number_sections: true
+    df_print: paged
+    code_download: false
+    toc_float:
+      collapsed: yes
+    toc_depth: 3
+editor_options:
+  chunk_output_type: inline    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+dir.base <- "."
+dir.results <- file.path(dir.base, "analysis-results/ADNI/LM/")
+dir.results.adj <- file.path(dir.results, "adjusted/")
+dir.pathway <-file.path(dir.base, "analysis-results/pathway_analysis/")
+for(p in grep("dir",ls(),value = T)) dir.create(get(p),recursive = TRUE,showWarnings = FALSE)
+```
+
+# Load packages and results
+
+```{r message = F, eval = T}
+library(tidyverse)
+library(data.table)
+library(ggpubr)
+library(methylGSA)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+```
+
+
+```{r message = F}
+## Load regression results
+DX <- c("AD","CN")
+file.list.lm.names <- list.files(
+  path = dir.results.adj,
+  pattern = paste0(DX, "_results",collapse = "|"),
+  full.names = T,
+  recursive = T
+)
+
+file.list.lm <- file.list.lm.names %>% map(~readr::read_csv(.))
+
+names(file.list.lm) <- unlist(
+  paste0(
+    "ADNI",
+    file.list.lm.names %>% map(~stringr::str_match(.,"_AD|_CN")),
+    file.list.lm.names %>% map(~stringr::str_extract(.,"_ABETA|_PTAU|_TAU"))
+  )
+)
+
+single.cpgs.ad <- file.list.lm[grep("_AD", names(file.list.lm))] %>% 
+  map(.,~dplyr::select(.,"cpg", "pValue.bacon.z")) %>% 
+  Reduce(
+    function(x,y, ...) full_join(
+      x,
+      y,
+      ..., 
+      by = "cpg"
+    ),.)
+colnames(single.cpgs.ad)[2:4] <- c("ABETA_p", "PTAU_p", "TAU_p")
+
+
+single.cpgs.cn <- file.list.lm[grep("_CN", names(file.list.lm))] %>% 
+  map(.,~dplyr::select(.,"cpg", "pValue.bacon.z")) %>% 
+  Reduce(
+    function(x,y, ...) full_join(
+      x,
+      y,
+      ..., 
+      by = "cpg"
+    ),.) 
+colnames(single.cpgs.cn)[2:4] <- c("ABETA_p", "PTAU_p", "TAU_p")
+```
+
+```{r}
+### Get annotation using function getAnnot()
+source(file.path(dir.base, "code/Utility/getAnnot.R"))
+CpGs <- getAnnot(array.type = "EPIC") %>% as.data.frame()
+writexl::write_xlsx(
+  CpGs,
+  file.path(dir.pathway, "CpGs_map_Genes.xlsx")
+)
+```
+
+
+# Analysis
+
+```{r}
+#aucFunction
+methylFn <- function(sample = "AD", csf = "ABETA", GS.type){
+  
+  if(sample == "AD") df.cpg <- single.cpgs.ad
+  if(sample == "CN") df.cpg <- single.cpgs.cn
+  
+  if(csf == "ABETA") cpg.pval <- df.cpg[["ABETA_p"]]
+  if(csf == "PTAU") cpg.pval <- df.cpg[["PTAU_p"]]
+  if(csf == "TAU") cpg.pval <- df.cpg[["TAU_p"]]
+  
+  names(cpg.pval) <- df.cpg$cpg
+  
+  res <- methylRRA(
+    cpg.pval = cpg.pval,
+    method = "GSEA", 
+    array.type = "EPIC",
+    GS.type = GS.type
+  )
+  
+  
+  return(res)
+  
+}
+```
+
+## AD Sample
+
+```{r}
+sample <- "AD"
+```
+
+### ABETA
+
+```{r eval = F}
+csf <- "ABETA"
+GS.type <- c("KEGG","GO", "Reactome")
+res <- plyr::llply(
+  GS.type,
+  .fun = function(gs){
+    methylFn(sample = sample, csf = csf, GS.type = gs)
+  },.parallel = F
+)
+names(res) <- GS.type
+```
+
+```{r eval = F}
+writexl::write_xlsx(
+  res,
+  file.path(dir.pathway, paste0("ADNI_methylGSA_methylRRA_", sample, "_", csf, "_results.xlsx"))
+)
+```
+
+
+```{r eval = F}
+### Get fdr < 0.05
+abeta.res.fdr05 <- res %>% map(.,~filter(.,padj < 0.05)) %>% 
+  rbindlist(., idcol = "GS.type")
+abeta.res.fdr05 <- abeta.res.fdr05 %>% mutate(CSF = csf,.before = 1)
+```
+
+
+### PTAU
+
+```{r eval = F}
+csf <- "PTAU"
+GS.type <- c("KEGG", "GO", "Reactome")
+res <- plyr::llply(
+  GS.type,
+  .fun = function(gs){
+    methylFn(sample = sample, csf = csf, GS.type = gs)
+  },.parallel = F
+)
+names(res) <- GS.type
+```
+
+
+```{r eval = F}
+writexl::write_xlsx(
+  res,
+  file.path(dir.pathway, paste0("ADNI_methylGSA_methylRRA_", sample, "_", csf, "_results.xlsx"))
+)
+```
+
+
+```{r eval = F}
+### Get fdr < 0.05
+ptau.res.fdr05 <- res %>% map(.,~filter(.,padj < 0.05)) %>% 
+  rbindlist(., idcol = "GS.type")
+ptau.res.fdr05 <- ptau.res.fdr05 %>% mutate(CSF = csf,.before = 1)
+```
+
+### TAU
+
+```{r eval = F}
+csf <- "TAU"
+GS.type <- c("KEGG", "GO", "Reactome")
+res <- plyr::llply(
+  GS.type,
+  .fun = function(gs){
+    methylFn(sample = sample, csf = csf, GS.type = gs)
+  },.parallel = F
+)
+names(res) <- GS.type
+```
+
+```{r eval = F}
+writexl::write_xlsx(
+  res,
+  file.path(dir.pathway, paste0("ADNI_methylGSA_methylRRA_", sample, "_", csf, "_results.xlsx"))
+)
+```
+
+
+```{r eval = F}
+### Get fdr < 0.05
+tau.res.fdr05 <- res %>% map(.,~filter(.,padj < 0.05)) %>% 
+  rbindlist(., idcol = "GS.type")
+tau.res.fdr05 <- tau.res.fdr05 %>% mutate(CSF = csf,.before = 1)
+```
+
+```{r eval = F}
+res.fdr05 <- rbind(abeta.res.fdr05,ptau.res.fdr05,tau.res.fdr05)
+writexl::write_xlsx(
+  res.fdr05,
+  file.path(dir.pathway, paste0("ADNI_methylGSA_methylRRA_", sample, "_cutoff_fdr05_results.xlsx"))
+)
+```
+
+```{r eval = T, echo = F}
+res.fdr05 <- readxl::read_xlsx(
+  file.path(dir.pathway, paste0("ADNI_methylGSA_methylRRA_", sample, "_cutoff_fdr05_results.xlsx"))
+)
+```
+
+```{r eval = T}
+res.fdr05
+```
+
+```{r}
+res.ptau <- res.fdr05 %>% filter(
+  ID %in% c("R-HSA-5576891", "R-HSA-397014")
+) 
+res.ptau.list <- plyr::alply(
+  res.ptau,
+  .margins = 1,
+  .fun = function(pathway){
+    pathway <- pathway %>% 
+      separate_rows(core_enrichment, sep = "/") 
+    cpgs_in_gene <- plyr::adply(
+      pathway,
+      .margins = 1,
+      .fun = function(gene){
+        cpgs <- CpGs %>%
+          filter(UCSC_RefGene_Name %in% gene$core_enrichment) %>%
+          dplyr::select(Name, UCSC_RefGene_Group)
+        gene <- cbind(gene, cpgs$Name)
+      }
+    )
+    names(cpgs_in_gene)[12] <- "cpg"
+    cpgs_in_gene
+  }
+)
+names(res.ptau.list) <- c("Cardiac conduction", "Muscle contraction")
+```
+
+```{r message = F}
+## Load ptau model results
+ptau.lm <- read_csv(
+  file.path(dir.base, "/analysis-results/ADNI/LM/adjusted/AD/ADNI_Last_Visit_CSF_PTAU_with_covariates_LM_AD_results_with_inflation.csv")
+)
+res.ptau.list.with.anno <- plyr::llply(
+  res.ptau.list,
+  .fun = function(res){
+    left_join(res, ptau.lm)
+  }
+)
+writexl::write_xlsx(
+  res.ptau.list.with.anno,
+  file.path(dir.pathway, "ADNI_AD_selected_pathway.xlsx")
+)
+```
+
+
+```{r message = F}
+res.ptau.list.with.anno %>% 
+  map(~group_by(.,core_enrichment)) %>% 
+  map(~slice_min(.,pValue.bacon)) %>% 
+  map(~arrange(.,pValue.bacon)) %>%
+  writexl::write_xlsx(
+    file.path(dir.pathway, "ADNI_AD_selected_pathway_pVal_slice_min.xlsx")
+  )
+```
+
+
+
+## CN Sample
+
+```{r eval = F}
+sample <- "CN"
+```
+
+### ABETA
+
+```{r eval = F}
+csf <- "ABETA"
+GS.type <- c("KEGG", "GO", "Reactome")
+res <- plyr::llply(
+  GS.type,
+  .fun = function(gs){
+    methylFn(sample = sample, csf = csf, GS.type = gs)
+  },.parallel = F
+)
+names(res) <- GS.type
+```
+
+```{r eval = F}
+writexl::write_xlsx(
+  res,
+  file.path(dir.pathway, paste0("ADNI_methylGSA_methylRRA_", sample, "_", csf, "_results.xlsx"))
+)
+```
+
+
+```{r eval = F}
+### Get fdr < 0.05
+abeta.res.fdr05 <- res %>% map(.,~filter(.,padj < 0.05)) %>% 
+  rbindlist(., idcol = "GS.type")
+abeta.res.fdr05 <- abeta.res.fdr05 %>% mutate(CSF = csf,.before = 1)
+```
+
+### PTAU
+
+```{r eval = F}
+csf <- "PTAU"
+GS.type <- c("KEGG", "GO", "Reactome")
+res <- plyr::llply(
+  GS.type,
+  .fun = function(gs){
+    methylFn(sample = sample, csf = csf, GS.type = gs)
+  },.parallel = F
+)
+names(res) <- GS.type
+```
+
+```{r eval = F}
+writexl::write_xlsx(
+  res,
+  file.path(dir.pathway, paste0("ADNI_methylGSA_methylRRA_", sample, "_", csf, "_results.xlsx"))
+)
+```
+
+
+```{r eval = F}
+### Get fdr < 0.05
+ptau.res.fdr05 <- res %>% map(.,~filter(.,padj < 0.05)) %>% 
+  rbindlist(., idcol = "GS.type")
+ptau.res.fdr05 <- ptau.res.fdr05 %>% mutate(CSF = csf,.before = 1)
+```
+
+### TAU
+
+```{r eval = F}
+csf <- "TAU"
+GS.type <- c("KEGG", "GO", "Reactome")
+res <- plyr::llply(
+  GS.type,
+  .fun = function(gs){
+    methylFn(sample = sample, csf = csf, GS.type = gs)
+  },.parallel = F
+)
+names(res) <- GS.type
+```
+
+```{r eval = F}
+writexl::write_xlsx(
+  res,
+  file.path(dir.pathway, paste0("ADNI_methylGSA_methylRRA_", sample, "_", csf, "_results.xlsx"))
+)
+```
+
+
+```{r eval = F}
+### Get fdr < 0.05
+tau.res.fdr05 <- res %>% map(.,~filter(.,padj < 0.05)) %>% 
+  rbindlist(., idcol = "GS.type")
+tau.res.fdr05 <- tau.res.fdr05 %>% mutate(CSF = csf,.before = 1)
+```
+
+```{r eval = F}
+writexl::write_xlsx(
+  rbind(
+    abeta.res.fdr05,ptau.res.fdr05,tau.res.fdr05
+  ),
+  file.path(dir.pathway, paste0("ADNI_methylGSA_methylRRA_", sample, "_cutoff_fdr05_results.xlsx"))
+)
+```
+
+```{r eval = T, echo = F}
+res.fdr05 <- readxl::read_xlsx(
+  file.path(dir.pathway, paste0("ADNI_methylGSA_methylRRA_", sample, "_cutoff_fdr05_results.xlsx"))
+)
+res.abeta <- readxl::read_xlsx(
+  file.path(dir.pathway, paste0("ADNI_methylGSA_methylRRA_CN_ABETA_results.xlsx")),
+  sheet = "KEGG"
+) %>% mutate(CSF = "ABETA", 
+             GS.type = "KEGG",
+             .before = 1)
+```
+
+```{r}
+res.selected <- res.fdr05 %>% filter(
+  ID %in% c("04020", "04810")
+) 
+res.selected <- rbind(res.abeta %>% filter(ID == "05010"), res.selected)
+res.selected.list <- plyr::alply(
+  res.selected,
+  .margins = 1,
+  .fun = function(pathway){
+    pathway <- pathway %>% 
+      separate_rows(core_enrichment, sep = "/") 
+    cpgs_in_gene <- plyr::adply(
+      pathway,
+      .margins = 1,
+      .fun = function(gene){
+        cpgs <- CpGs %>%
+          filter(UCSC_RefGene_Name %in% gene$core_enrichment) %>%
+          dplyr::select(Name, UCSC_RefGene_Group)
+        gene <- cbind(gene, cpgs$Name)
+      }
+    )
+    names(cpgs_in_gene)[12] <- "cpg"
+    cpgs_in_gene
+  }
+)
+names(res.selected.list) <- res.selected$Description
+```
+
+```{r message = F}
+## Load tau and abeta model results
+tau.lm <- read_csv(
+  file.path(dir.base, "/analysis-results/ADNI/LM/adjusted/CN/ADNI_Last_Visit_CSF_TAU_with_covariates_LM_CN_results_with_inflation.csv")
+)
+abeta.lm <- read_csv(
+  file.path(dir.base, "/analysis-results/ADNI/LM/adjusted/CN/ADNI_Last_Visit_CSF_ABETA_with_covariates_LM_CN_results_with_inflation.csv")
+)
+res.selected.list.with.anno <- plyr::llply(
+  res.selected.list,
+  .fun = function(res){
+    if(any(res$CSF == "ABETA")){
+      left_join(res, abeta.lm)
+    }else{
+      left_join(res, tau.lm)
+    }
+  }
+)
+writexl::write_xlsx(
+  res.selected.list.with.anno,
+  file.path(dir.pathway, "ADNI_CN_selected_pathway.xlsx")
+)
+```
+
+```{r}
+res.selected.list.with.anno %>% 
+  map(~group_by(.,core_enrichment)) %>% 
+  map(~slice_min(.,pValue.bacon)) %>% 
+  map(~arrange(.,pValue.bacon)) %>%
+  writexl::write_xlsx(
+    file.path(dir.pathway, "ADNI_CN_selected_pathway_pVal_slice_min.xlsx")
+  )
+```
+
+# Correlations
+
+```{r}
+## Load results
+CSF <- c("ABETA", "PTAU", "TAU")
+GS.type <- c("KEGG", "GO", "Reactome")
+res.list <- list.files(
+  path = dir.pathway,
+  pattern = paste0(apply(expand.grid(DX,CSF),1,function(g) paste0(g,collapse = "_")),collapse = "|"),
+  full.names = T
+)
+results <- plyr::llply(
+  res.list,
+  .fun = function(l){
+    res <- plyr::llply(
+      GS.type,
+      .fun = function(g){
+        readxl::read_xlsx(path = l, sheet = g)
+      })
+    names(res) <- GS.type
+    res
+  })
+names(results) <- str_extract(
+  res.list,
+  paste0(apply(expand.grid(DX,CSF),1,function(g) paste0(g,collapse = "_")),collapse = "|")
+)
+```
+
+
+
+```{r}
+#aucFn
+plot_correlation <- function(csf, label.x = 4, sig.pathway = F){
+  
+  res <- results[grep(paste0("_",csf), names(results))] %>% 
+    map(.,~rbindlist(.,idcol = "GS.type")) %>% 
+    map(.,~mutate(.,log10_pVal = -log10(pvalue))) %>%
+    map(.,~dplyr::select(., -c("leading_edge","core_enrichment")))
+  
+  df.res <- plyr::llply(
+    names(res),
+    .fun = function(r){
+      res[[r]] %>% rename_with(.fn = function(c) paste0(r,"_", c), .cols = -c("GS.type", "ID","Description"))
+    }
+  ) %>% Reduce(full_join,.) 
+  
+  if(sig.pathway){
+    df.res <- df.res %>% 
+      filter(get(paste0("AD_",csf, "_padj")) < 0.25 | get(paste0("CN_",csf, "_padj")) < 0.25) %>%
+      mutate(sig.in.ad = ifelse(get(paste0("AD_",csf, "_padj")) < 0.25, 1, 0)) %>% 
+      arrange(GS.type, sig.in.ad, get(paste0("AD_",csf, "_padj")))
+    
+    df.res %>% filter(GS.type != "GO") %>%  writexl::write_xlsx(
+      file.path(dir.pathway, paste0(csf,"_cutoff_fdr25_results.xlsx"))
+    )
+    
+  }
+  
+  
+  
+  p <- ggpubr::ggscatter(
+      data = df.res,
+      x = paste0("AD_",csf, "_log10_pVal"),
+      y = paste0("CN_",csf, "_log10_pVal"),
+      xlab = paste("AD ",csf," group -log10(pValue)"),
+      ylab = paste("CN ",csf," group -log10(pValue)"),
+      facet.by = "GS.type",
+      palette = "jco",
+      cor.coef = TRUE,
+      size = .5,
+      cor.coeff.args = list(method = "spearman", label.sep = "\n",label.x = label.x)
+    )
+  
+  return(p)
+}
+```
+
+## All pathway
+
+### ABETA
+
+```{r fig.width=10,fig.height=6}
+plot_correlation(csf = "ABETA")
+```
+
+### PTAU
+
+```{r fig.width=10,fig.height=6}
+plot_correlation(csf = "PTAU")
+```
+
+### TAU
+
+```{r fig.width=10,fig.height=6}
+plot_correlation(csf = "TAU")
+```
+
+## Significant pathway
+
+### ABETA
+
+```{r fig.width=10,fig.height=6}
+plot_correlation(csf = "ABETA", sig.pathway = T)
+```
+
+
+### PTAU
+
+```{r fig.width=10,fig.height=6}
+plot_correlation(csf = "PTAU", sig.pathway = T)
+```
+
+
+### TAU
+
+```{r fig.width=10,fig.height=6}
+plot_correlation(csf = "TAU", sig.pathway = T)
+```
+
+# Session Information
+
+```{r eval = T}
+devtools::session_info()
+```
+

@@ -1,0 +1,185 @@
+---
+title: "Distinct CSF biomarker-associated DNA methylation in Alzheimer's disease and cognitively normal subjects"
+subtitle: "ADNI dataset linear model with interaction terms" 
+author: "Wei Zhang, Lily Wang"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    highlight: pygments
+    theme: yeti
+    toc: true
+    number_sections: true
+    df_print: paged
+    code_download: false
+    toc_float:
+      collapsed: yes
+    toc_depth: 3
+    font_size: 10
+editor_options:
+  chunk_output_type: inline 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(SummarizedExperiment)
+dir.base <- "."
+dir.data.new <- file.path(dir.base, "data/ADNI/")
+dir.data.new.pca <- file.path(dir.data.new, "/DNA_methylation/pca_filtering/")
+dir.results <- file.path(dir.base, "analysis-results/ADNI/Interaction/")
+dir.results.raw <- file.path(dir.results, paste0("raw/"))
+dir.results.adj <- file.path(dir.results, paste0("adjusted/"))
+dir.results.inflation <- file.path(dir.results, paste0("inflation_stats/"))
+dir.results.sig <- file.path(dir.results, "sig_cpgs")
+for(p in grep("dir",ls(),value = T)) dir.create(get(p),recursive = TRUE,showWarnings = FALSE)
+```
+
+# Load data
+
+```{r message = F}
+adni.se_with_csf <- readRDS(file.path(dir.data.new.pca,"ADNI_QNBMIQ_PCfiltered_min_age_at_visit_65_with_smoke_probes_and_CSF.RDS"))
+
+pheno <- colData(adni.se_with_csf) %>% as.data.frame()
+beta.all <- assay(adni.se_with_csf) * 100
+pheno$granulocytes <- pheno$Eosino + pheno$Neutro
+pheno$DX <- factor(pheno$DX, levels = c("CN", "MCI","Dementia"))
+pheno$PlateNumber <- as.factor(pheno$PlateNumber)
+identical(colnames(beta.all), pheno$barcodes)
+```
+
+# Analysis
+
+```{r}
+pheno.last.visit <- pheno %>% group_by(RID) %>% slice_max(age_at_visit)
+pheno.ad.cn <- pheno.last.visit %>% filter(DX %in% c("Dementia", "CN")) %>% as.data.frame()
+pheno.ad.cn$DX <- factor(pheno.ad.cn$DX, levels = c("CN","Dementia"))
+rownames(pheno.ad.cn) <- pheno.ad.cn$barcodes
+beta.ad.cn <- beta.all[,match(rownames(pheno.ad.cn), colnames(beta.all))]
+```
+
+```{r eval = F}
+### ABETA
+doParallel::registerDoParallel(10)
+ABETA.results.lme <- plyr::adply(
+  .data = beta.ad.cn,
+  .margins = 1,
+  .fun = function(one){
+    dat <- data.frame (beta = one, pheno.ad.cn)
+    tryCatch({
+      suppressMessages({
+        b <- lm(
+          log_ABETA ~ beta * DX + PTGENDER + age_at_visit + PlateNumber + B + NK + 
+                      CD4T + Mono + granulocytes + APOE4 + Smok_hist + PTEDUCAT,
+          data = dat
+        )
+        summary(b)
+        beta_results <- coef(summary(b)) [grep("beta:DXDementia",rownames(coef(summary(b))),value = TRUE),]
+        return(beta_results)
+      })
+    }, error = function(e) {message(e);return(NULL)})
+  }, .parallel = T, .progress = "time",.id = "cpg",.inform = F
+)
+
+write_csv(
+  ABETA.results.lme,
+  file.path(dir.results.raw, "ADNI_Last_Visit_CSF_ABETA_with_covariates_Interaction_AD_CN_results.csv")
+)
+### TAU
+doParallel::registerDoParallel(10)
+TAU.results.lme <- plyr::adply(
+  .data = beta.ad.cn, 
+  .margins = 1,
+  .fun = function(one){
+    dat <- data.frame (beta = one, pheno.ad.cn)
+    tryCatch({
+      suppressMessages({
+        b <- lm( 
+          log_TAU ~ beta * DX + PTGENDER + age_at_visit + PlateNumber + B + NK + 
+                    CD4T + Mono + granulocytes + APOE4 + Smok_hist + PTEDUCAT,
+          data = dat
+        )
+        summary(b)
+        beta_results <- coef(summary(b)) [grep("beta:DXDementia",rownames(coef(summary(b)) ),value = TRUE),]
+        return(beta_results)
+      })
+    }, error = function(e) {message(e);return(NULL)})
+  }, .parallel = T, .progress = "time",.id = "cpg",.inform = F
+)
+
+write_csv(
+  TAU.results.lme,
+  file.path(dir.results.raw, "ADNI_Last_Visit_CSF_TAU_with_covariates_Interaction_AD_CN_results.csv")
+)
+### PTAU
+doParallel::registerDoParallel(10)
+PTAU.results.lme <- plyr::adply(
+  .data = beta.ad.cn, 
+  .margins = 1,
+  .fun = function(one){
+    dat <- data.frame (beta = one, pheno.ad.cn)
+    tryCatch({
+      suppressMessages({
+        b <- lm( 
+          log_PTAU ~ beta * DX + PTGENDER + age_at_visit + PlateNumber + B + NK + 
+                    CD4T + Mono + granulocytes + APOE4 + Smok_hist + PTEDUCAT,
+          data = dat
+        )
+        summary(b)
+        beta_results <- coef(summary(b)) [grep("beta:DXDementia",rownames(coef(summary(b)) ),value = TRUE),]
+        return(beta_results)
+      })
+    }, error = function(e) {message(e);return(NULL)})
+  }, .parallel = T, .progress = "time",.id = "cpg",.inform = F
+)
+
+write_csv(
+  PTAU.results.lme,
+  file.path(dir.results.raw, "ADNI_Last_Visit_CSF_PTAU_with_covariates_Interaction_AD_CN_results.csv")
+)
+```
+
+## Annotation
+
+```{r message = F}
+source(file.path(dir.base, "code/Utility/annotation_and_bacon.R"))
+```
+
+```{r eval = T, echo = F, message = F}
+ABETA.results.lme <- read_csv(
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_ABETA_with_covariates_Interaction_AD_CN_results.csv"))
+)
+TAU.results.lme <- read_csv(
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_TAU_with_covariates_Interaction_AD_CN_results.csv"))
+)
+PTAU.results.lme <- read_csv(
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_PTAU_with_covariates_Interaction_AD_CN_results.csv"))
+)
+```
+
+```{r eval = T}
+ABETA.results.lme.annotated <- ABETA.results.lme %>% annotate_results(adni.se_with_csf)
+TAU.results.lme.annotated <- TAU.results.lme %>% annotate_results(adni.se_with_csf)
+PTAU.results.lme.annotated <- PTAU.results.lme %>% annotate_results(adni.se_with_csf)
+
+write_csv(
+  ABETA.results.lme.annotated,
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_ABETA_with_covariates_Interaction_AD_CN_results_with_annotation.csv"))
+)
+write_csv(
+  TAU.results.lme.annotated,
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_TAU_with_covariates_Interaction_AD_CN_results_with_annotation.csv"))
+)
+write_csv(
+  PTAU.results.lme.annotated,
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_PTAU_with_covariates_Interaction_AD_CN_results_with_annotation.csv"))
+)
+```
+
+
+
+
+# Session Information
+
+```{r}
+devtools::session_info()
+```

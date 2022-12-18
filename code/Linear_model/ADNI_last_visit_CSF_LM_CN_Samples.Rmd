@@ -1,0 +1,490 @@
+---
+title: "Distinct CSF biomarker-associated DNA methylation in Alzheimer's disease and cognitively normal subjects"
+subtitle: "ADNI dataset linear model stratified by Diagnosis -- AD samples" 
+author: "Wei Zhang, Lily Wang"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    highlight: pygments
+    theme: yeti
+    toc: true
+    number_sections: true
+    df_print: paged
+    code_download: false
+    toc_float:
+      collapsed: yes
+    toc_depth: 3
+    font_size: 10
+editor_options:
+  chunk_output_type: inline 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(SummarizedExperiment)
+dir.base <- "."
+dir.data.new <- file.path(dir.base, "data/ADNI/")
+dir.data.new.pca <- file.path(dir.data.new, "/DNA_methylation/pca_filtering/")
+dir.results <- file.path(dir.base, "analysis-results/ADNI/LM/")
+DX = "CN"
+dir.results.raw <- file.path(dir.results, paste0("raw/", DX, "/"))
+dir.results.adj <- file.path(dir.results, paste0("adjusted/", DX, "/"))
+dir.results.inflation <- file.path(dir.results, paste0("inflation_stats/"))
+for(p in grep("dir",ls(),value = T)) dir.create(get(p),recursive = TRUE,showWarnings = FALSE)
+```
+
+
+# Load data
+
+```{r message = F}
+adni.se_with_csf <- readRDS(file.path(dir.data.new.pca,"ADNI_QNBMIQ_PCfiltered_min_age_at_visit_65_with_smoke_probes_and_CSF.RDS"))
+
+pheno <- colData(adni.se_with_csf) %>% as.data.frame()
+beta.all <- assay(adni.se_with_csf) * 100
+pheno$granulocytes <- pheno$Eosino + pheno$Neutro
+pheno$DX <- factor(pheno$DX, levels = c("CN", "MCI","Dementia"))
+pheno$PlateNumber <- as.factor(pheno$PlateNumber)
+identical(colnames(beta.all), pheno$barcodes)
+```
+
+# Analysis
+
+
+```{r}
+pheno.last.visit <- pheno %>% group_by(RID) %>% slice_max(age_at_visit)
+pheno.cn <- pheno.last.visit %>% filter(DX == "CN") %>% as.data.frame()
+rownames(pheno.cn) <- pheno.cn$barcodes
+beta.cn <- beta.all[,match(rownames(pheno.cn), colnames(beta.all))]
+```
+
+
+```{r}
+pheno.cn %>%
+  summarise(
+    "ABETA mean" = mean(log_ABETA), 
+    "ABETA sd" = sd(log_ABETA), 
+    n = n()
+  ) 
+```
+
+```{r}
+pheno.cn %>%
+  summarise(
+    "TAU mean" = mean(log_TAU), 
+    "TAU sd" = sd(log_TAU), 
+    n = n()
+  ) 
+```
+
+```{r}
+pheno.cn %>%
+  summarise(
+    "PTAU mean" = mean(log_PTAU), 
+    "PTAU sd" = sd(log_PTAU), 
+    n = n()
+  ) 
+```
+
+
+```{r eval = F}
+### ABETA
+doParallel::registerDoParallel(10)
+ABETA.results.ad.lme <- plyr::adply(
+  .data = beta.cn,
+  .margins = 1,
+  .fun = function(one){
+    dat.ad <- data.frame (beta = one, pheno.cn)
+    tryCatch({
+      suppressMessages({
+        b <- lm(
+          log_ABETA ~ beta + PTGENDER + age_at_visit + PlateNumber + B + NK + 
+                      CD4T + Mono + granulocytes + APOE4 + Smok_hist + PTEDUCAT,
+          data = dat.ad
+        )
+        summary(b)
+        beta_results <- coef(summary(b)) [grep("beta",rownames(coef(summary(b)) ),value = TRUE),]
+        return(beta_results)
+      })
+    }, error = function(e) {message(e);return(NULL)})
+  }, .parallel = T, .progress = "time",.id = "cpg",.inform = F
+)
+
+write_csv(
+  ABETA.results.ad.lme,
+  file.path(dir.results.raw, "ADNI_Last_Visit_CSF_ABETA_with_covariates_LM_CN_results.csv")
+)
+### TAU
+doParallel::registerDoParallel(10)
+TAU.results.ad.lme <- plyr::adply(
+  .data = beta.cn, 
+  .margins = 1,
+  .fun = function(one){
+    dat.ad <- data.frame (beta = one, pheno.cn)
+    tryCatch({
+      suppressMessages({
+        b <- lm( 
+          log_TAU ~ beta + PTGENDER + age_at_visit + PlateNumber + B + NK + 
+                    CD4T + Mono + granulocytes + APOE4 + Smok_hist + PTEDUCAT,
+          data = dat.ad
+        )
+        summary(b)
+        beta_results <- coef(summary(b)) [grep("beta",rownames(coef(summary(b)) ),value = TRUE),]
+        return(beta_results)
+      })
+    }, error = function(e) {message(e);return(NULL)})
+  }, .parallel = T, .progress = "time",.id = "cpg",.inform = F
+)
+
+write_csv(
+  TAU.results.ad.lme,
+  file.path(dir.results.raw, "ADNI_Last_Visit_CSF_TAU_with_covariates_LM_CN_results.csv")
+)
+### PTAU
+doParallel::registerDoParallel(10)
+PTAU.results.ad.lme <- plyr::adply(
+  .data = beta.cn, 
+  .margins = 1,
+  .fun = function(one){
+    dat.ad <- data.frame (beta = one, pheno.cn)
+    tryCatch({
+      suppressMessages({
+        b <- lm( 
+          log_PTAU ~ beta + PTGENDER + age_at_visit + PlateNumber + B + NK + 
+                    CD4T + Mono + granulocytes + APOE4 + Smok_hist + PTEDUCAT,
+          data = dat.ad
+        )
+        summary(b)
+        beta_results <- coef(summary(b)) [grep("beta",rownames(coef(summary(b)) ),value = TRUE),]
+        return(beta_results)
+      })
+    }, error = function(e) {message(e);return(NULL)})
+  }, .parallel = T, .progress = "time",.id = "cpg",.inform = F
+)
+
+write_csv(
+  PTAU.results.ad.lme,
+  file.path(dir.results.raw, "ADNI_Last_Visit_CSF_PTAU_with_covariates_LM_CN_results.csv")
+)
+```
+
+## Annotation
+
+```{r message = F}
+source(file.path(dir.base, "code/Utility/annotation_and_bacon.R"))
+```
+
+```{r eval = T, echo = F, message = F}
+ABETA.results.lme <- read_csv(
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_ABETA_with_covariates_LM_", DX, "_results.csv"))
+)
+TAU.results.lme <- read_csv(
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_TAU_with_covariates_LM_", DX, "_results.csv"))
+)
+PTAU.results.lme <- read_csv(
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_PTAU_with_covariates_LM_", DX, "_results.csv"))
+)
+```
+
+```{r eval = T}
+ABETA.results.lme.annotated <- ABETA.results.lme %>% annotate_results(adni.se_with_csf)
+TAU.results.lme.annotated <- TAU.results.lme %>% annotate_results(adni.se_with_csf)
+PTAU.results.lme.annotated <- PTAU.results.lme %>% annotate_results(adni.se_with_csf)
+
+write_csv(
+  ABETA.results.lme.annotated,
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_ABETA_with_covariates_LM_", DX, "_results_annotated.csv"))
+)
+write_csv(
+  TAU.results.lme.annotated,
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_TAU_with_covariates_LM_", DX, "_results_annotated.csv"))
+)
+write_csv(
+  PTAU.results.lme.annotated,
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_PTAU_with_covariates_LM_", DX, "_results_annotated.csv"))
+)
+```
+
+# Bacon method adjust for inflation
+
+```{r echo = F}
+estimation_of_inflation <- function(data){
+
+  ### 1. Compute genomic inflation factor before bacon adjustment
+  stats.type <- grep("z value|t value|Wald|t.value",colnames(data), value = T)
+
+  data <- data %>% mutate(
+    chisq = get(stats.type)^2
+  ) 
+  
+  # inflation factor - last term is median from chisq distrn with 1 df  
+  inflationFactor <- median(data$chisq,na.rm = TRUE) / qchisq(0.5, 1)
+  print("lambda")
+  print(inflationFactor)
+  
+  se <- data[[grep("Std", colnames(data), value = T)]]
+
+  ### 2. bacon analysis
+  bc <- bacon(
+    teststatistics = NULL,
+    effectsizes =  data$Estimate,
+    standarderrors = se,
+    na.exclude = TRUE,
+    verbose = F
+  )
+#  posteriors(bc)
+  # inflation factor
+  print("lambda.bacon")
+  print(inflation(bc))
+  # bias
+  print("estimate bias")
+  print(bias(bc))
+  print("estimates")
+  print(estimates(bc))
+  
+  ### 3. Create final dataset
+  data.with.inflation <- data.frame(
+    data,
+    Estimate.bacon = bacon::es(bc),
+    StdErr.bacon = bacon::se(bc),
+    pValue.bacon = pval(bc),
+    fdr.bacon = p.adjust(pval(bc), method = "fdr"),
+    stringsAsFactors = FALSE
+  )
+  
+  print("o After bacon correction")
+  print("Conventional lambda")
+  lambda.con <- median((data.with.inflation$Estimate.bacon/data.with.inflation$StdErr.bacon) ^ 2,na.rm = TRUE)/qchisq(0.5, 1)
+  print(lambda.con)
+  
+ # percent_null <- trunc ( estimates(bc)[1]*100, digits = 0)
+ # percent_1  <- trunc ( estimates(bc)[2]*100, digits = 0 )
+ # percent_2  <- 100 - percent_null - percent_1  
+  bc2 <- bacon(
+    teststatistics = NULL,
+    effectsizes =  data.with.inflation$Estimate.bacon,
+    standarderrors = data.with.inflation$StdErr.bacon,
+    na.exclude = TRUE,
+    priors = list(
+      sigma = list(alpha = 1.28,  beta = 0.36), 
+      mu = list(lambda = c(0, 3, -3), tau = c(1000, 100, 100)), 
+      epsilon = list(gamma = c(99, .5, .5)))
+  )
+  
+  print("inflation")
+  print(inflation(bc2))
+  print("estimates")
+  print(estimates(bc2))
+  
+  data.with.inflation <- data.with.inflation %>% dplyr::select(-chisq)
+  
+  inflation.stat <- data.frame(
+    "Inflation.org" = inflationFactor,
+    "Inflation.bacon" = inflation(bc),
+    "Bias.bacon" = bias(bc),
+    "Inflation.after.correction" = lambda.con,
+    "Inflation.bacon.after.correction" = inflation(bc2),
+    "Bias.bacon.after.correction" = bias(bc2)
+  )
+  return(
+    list(
+      "data.with.inflation" = data.with.inflation,
+      "inflation.stat" = inflation.stat
+    )
+  )
+}
+
+zscore_of_inflation <- function(data){
+  
+  ### 1. Convert t scores to z scores
+  z.scores <- data[["t.value"]]
+  
+  ### 2. bacon analysis
+  bc <- bacon(
+    teststatistics = z.scores,
+    na.exclude = TRUE,
+    verbose = F
+  )
+  # inflation factor
+  print("lambda.bacon")
+  print(inflation(bc))
+  # bias
+  print("estimate bias")
+  print(bias(bc))
+  print("estimates")
+  print(estimates(bc))
+  
+  ### 3. Create final dataset
+  data.with.inflation <- data %>% mutate(
+    zScore.bacon = tstat(bc)[,1],
+    pValue.bacon.z = pval(bc)[,1],
+    fdr.bacon.z = p.adjust(pval(bc), method = "fdr"),
+  ) %>% mutate(z.value = z.scores,.after = t.value)
+  
+  print("o After bacon correction")
+  print("Conventional lambda")
+  lambda.con <- median((data.with.inflation$zScore.bacon) ^ 2,na.rm = TRUE)/qchisq(0.5, 1)
+  print(lambda.con)
+  
+  percent_null <- trunc ( estimates(bc)[1]*100, digits = 0)
+  percent_1  <- trunc ( estimates(bc)[2]*100, digits = 0 )
+  percent_2  <- 100 - percent_null - percent_1  
+  bc2 <- bacon(
+    teststatistics = data.with.inflation$zScore.bacon,
+    na.exclude = TRUE,
+    priors = list(
+      sigma = list(alpha = 1.28,  beta = 0.36), 
+      mu = list(lambda = c(0, 3, -3), tau = c(1000, 100, 100)), 
+      epsilon = list(gamma = c(90, 5, 5)))
+  )
+  
+  print("inflation")
+  print(inflation(bc2))
+  print("estimates")
+  print(estimates(bc2))
+  
+  inflation.stat <- data.frame(
+    "Inflation.bacon.z" = inflation(bc),
+    "Bias.bacon.z" = bias(bc),
+    "Inflation.after.correction.z" = lambda.con,
+    "Inflation.bacon.after.correction.z" = inflation(bc2),
+    "Bias.bacon.after.correction.z" = bias(bc2)
+  )
+  
+  return(
+    list(
+      "data.with.inflation" = data.with.inflation,
+      "bacon.obj" = bc,
+      "inflation.stat" = inflation.stat
+    )
+  )
+}
+
+```
+
+## ABETA
+
+```{r echo = F, message = F}
+ABETA.results.lme.annotated <- read_csv(
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_ABETA_with_covariates_LM_", DX, "_results_annotated.csv"))
+)
+```
+
+```{r}
+ABETA.results.lme.inflated <- ABETA.results.lme.annotated %>% estimation_of_inflation()
+```
+
+```{r}
+ABETA.results.lme.inflated.z <- ABETA.results.lme.inflated$data.with.inflation %>% 
+  zscore_of_inflation()
+plot(ABETA.results.lme.inflated.z$bacon.obj, type = "qq") + theme_bw()
+```
+
+
+```{r eval = F}
+ABETA.results.lme.inflated.z$data.with.inflation %>% write_csv(
+  file.path(
+    dir.results.adj, 
+    paste0("ADNI_Last_Visit_CSF_ABETA_with_covariates_LM_", DX, "_results_with_inflation.csv")
+  )
+)
+```
+
+```{R}
+ABETA.inflation.stat <- cbind(ABETA.results.lme.inflated$inflation.stat,ABETA.results.lme.inflated.z$inflation.stat)
+ABETA.inflation.stat
+```
+
+
+## TAU
+
+```{r echo = F, message = F}
+TAU.results.lme.annotated <- read_csv(
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_TAU_with_covariates_LM_", DX, "_results_annotated.csv"))
+)
+```
+
+```{r}
+TAU.results.lme.inflated <- TAU.results.lme.annotated %>% estimation_of_inflation()
+```
+
+```{r}
+TAU.results.lme.inflated.z <- TAU.results.lme.inflated$data.with.inflation %>% 
+  zscore_of_inflation()
+plot(TAU.results.lme.inflated.z$bacon.obj, type = "qq") + theme_bw()
+```
+
+```{r eval = F}
+TAU.results.lme.inflated.z$data.with.inflation %>% write_csv(
+  file.path(
+    dir.results.adj, 
+    paste0("ADNI_Last_Visit_CSF_TAU_with_covariates_LM_", DX, "_results_with_inflation.csv")
+  )
+)
+```
+
+```{R}
+TAU.inflation.stat <- cbind(TAU.results.lme.inflated$inflation.stat,TAU.results.lme.inflated.z$inflation.stat)
+TAU.inflation.stat
+```
+
+
+## PTAU
+
+```{r echo = F, message = F}
+PTAU.results.lme.annotated <- read_csv(
+  file.path(dir.results.raw, paste0("ADNI_Last_Visit_CSF_PTAU_with_covariates_LM_", DX, "_results_annotated.csv"))
+)
+```
+
+```{r}
+PTAU.results.lme.inflated <- PTAU.results.lme.annotated %>% estimation_of_inflation()
+```
+
+
+```{r}
+PTAU.results.lme.inflated.z <- PTAU.results.lme.inflated$data.with.inflation %>% 
+  zscore_of_inflation()
+plot(PTAU.results.lme.inflated.z$bacon.obj, type = "qq") + theme_bw()
+```
+
+
+```{r eval = F}
+PTAU.results.lme.inflated.z$data.with.inflation %>% write_csv(
+  file.path(
+    dir.results.adj, 
+    paste0("ADNI_Last_Visit_CSF_PTAU_with_covariates_LM_", DX, "_results_with_inflation.csv")
+  )
+)
+```
+
+```{R}
+PTAU.inflation.stat <- cbind(PTAU.results.lme.inflated$inflation.stat,PTAU.results.lme.inflated.z$inflation.stat)
+PTAU.inflation.stat
+```
+
+
+```{r}
+inflation.stat <- rbind(
+  ABETA.inflation.stat,
+  TAU.inflation.stat,
+  PTAU.inflation.stat
+)
+rownames(inflation.stat) <- c("ABETA", "TAU", "PTAU")
+inflation.stat
+```
+
+```{R eval = F}
+writexl::write_xlsx(
+  inflation.stat %>% rownames_to_column("CSF"),
+  file.path(dir.results.inflation, "ADNI_Last_Visit_CN_inflation_and_bias_table.xlsx")
+)
+```
+
+
+# Session Information
+
+```{r}
+devtools::session_info()
+```
+
