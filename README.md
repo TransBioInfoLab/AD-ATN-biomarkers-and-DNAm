@@ -58,6 +58,14 @@ To identify methylation quantitative trait loci (mQTLs) for the significant DMRs
 |---------------------|-------------|
 | mQTLs_analysis/ADbiomarkers_mQTLs_analysis.R | [Link to the script](https://github.com/TransBioInfoLab/AD-ATN-biomarkers-and-DNAm/blob/main/code/mQTLs_analysis/ADbiomarkers_mQTLs_analysis.R) |
 
+### 6. Whole genome analysis results in the analysis of CN samples
+
+| File |  Link to the script |
+|---------------------|-------------|
+| DNAm associated with abeta | [Link to results](https://github.com/TransBioInfoLab/AD-ATN-biomarkers-and-DNAm/blob/main/results/DNAm-to-CSF-biomarkers/CN/ADNI_Last_Visit_CSF_ABETA_with_covariates_LM_CN_results_with_inflation.csv) |
+| DNAm associated with pTau | [Link to results](https://github.com/TransBioInfoLab/AD-ATN-biomarkers-and-DNAm/blob/main/results/DNAm-to-CSF-biomarkers/CN/ADNI_Last_Visit_CSF_PTAU_with_covariates_LM_CN_results_with_inflation.csv) |
+| DNAm associated with tTau | [Link to results](https://github.com/TransBioInfoLab/AD-ATN-biomarkers-and-DNAm/blob/main/results/DNAm-to-CSF-biomarkers/CN/ADNI_Last_Visit_CSF_TAU_with_covariates_LM_CN_results_with_inflation.csv) |
+
 
 ## For reproducible research
 
