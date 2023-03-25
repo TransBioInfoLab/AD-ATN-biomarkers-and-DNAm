@@ -23,10 +23,10 @@ The DNA methylation samples were measured with the Illumina HumanMethylation EPI
 
 We studied the association between DNA methylation and CSF biomarkers for AD in the cognitive normal (CN) and AD subjects separately. The bacon method was used to correct genomic inflation and bias. In addition, interaction models were used to compare the methylation-to-CSF biomarker associations in CN samples and AD samples.
 
-|Result | Link | Link to the script |
+|File | Link | Link to the script |
 |---------|--------------------|-------------|
-|AD| [Link](https://github.com/TransBioInfoLab/AD-ATN-biomarkers-and-DNAm/blob/main/results/DNAm-to-CSF-biomarkers/AD/) | [Link to the script](https://github.com/TransBioInfoLab/AD-ATN-biomarkers-and-DNAm/blob/main/code/Linear_model/ADNI_last_visit_CSF_LM_AD_Samples.Rmd)  |
-|CN| [Link](https://github.com/TransBioInfoLab/AAD-ATN-biomarkers-and-DNAm/blob/main/results/DNAm-to-CSF-biomarkers/CN/) |[Link to the script](https://github.com/TransBioInfoLab/AD-ATN-biomarkers-and-DNAm/blob/main/code/Linear_model/ADNI_last_visit_CSF_LM_CN_Samples.Rmd)  |
+|AD| [Link to results](https://github.com/TransBioInfoLab/AD-ATN-biomarkers-and-DNAm/blob/main/results/DNAm-to-CSF-biomarkers/AD/) | [Link to the script](https://github.com/TransBioInfoLab/AD-ATN-biomarkers-and-DNAm/blob/main/code/Linear_model/ADNI_last_visit_CSF_LM_AD_Samples.Rmd)  |
+|CN| [Link to results](https://github.com/TransBioInfoLab/AAD-ATN-biomarkers-and-DNAm/blob/main/results/DNAm-to-CSF-biomarkers/CN/) |[Link to the script](https://github.com/TransBioInfoLab/AD-ATN-biomarkers-and-DNAm/blob/main/code/Linear_model/ADNI_last_visit_CSF_LM_CN_Samples.Rmd)  |
 |Interaction||[Link to the script](https://github.com/TransBioInfoLab/AD-ATN-biomarkers-and-DNAm/blob/main/code/Linear_model/ADNI_last_visit_CSF_Interaction_model.Rmd)  |
 
 
